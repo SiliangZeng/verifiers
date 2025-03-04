@@ -6,6 +6,8 @@ from openai import OpenAI
 from verifiers.parsers import XMLParser
 from verifiers.rubrics import Rubric
 
+os.environ["LLM_API_KEY"] = "token-abc123"
+
 class LLMRubric(Rubric):
     """
     Rubric that uses an LLM to evaluate the correctness of answers.
@@ -29,7 +31,7 @@ class LLMRubric(Rubric):
         # Set up reward functions
         self.reward_funcs = [
             #self.exact_answer_reward_func,  # Exact string matching (traditional)
-            self.llm_answer_reward_func,    # LLM-based semantic evaluation
+            self.llm_verify_judge_reward_func,    # LLM-based semantic evaluation
             self.int_answer_reward_func,
             self.parser.get_format_reward_func(),  # Check format compliance
             self.parser.get_xml_reward_func()      # Check XML structure
@@ -115,5 +117,130 @@ class LLMRubric(Rubric):
             # except Exception as e:
             #     self.logger.error(f"Error in LLM evaluation: {e}")
             #     rewards.append(0.0)
+                
+        return rewards
+    
+    def llm_verify_reward_func(self, completions, answer, prompts, **kwargs) -> List[float]:
+        """Reward function that uses an LLM to evaluate if the answer is correct based on the original prompt.
+        
+        Args:
+            completions: List of completion trajectories
+            answer: List of ground truth answers (not used in this implementation)
+            prompts: List of original prompts containing the questions
+            
+        Returns:
+            List of reward scores between 0.0 and 1.0
+        """
+        client = self._get_llm_client()
+        responses = [self.get_last_answer(c) for c in completions]
+        rewards = []
+        
+        
+        for resp, prompt, ans in zip(responses, prompts, answer):
+            if resp is None:
+                rewards.append(0.0)
+                continue
+            
+            user_message = str(prompt)
+            
+            eval_prompt = [
+                {"role": "system", "content": (
+                    "You are an expert evaluator. Your task is to determine if the provided answer "
+                    "correctly addresses the given question or task. Evaluate the answer solely based "
+                    "on its correctness and appropriateness for the question. "
+                    "Answer with just 'yes' if the answer is correct, or 'no' if it's incorrect."
+                )},
+                {"role": "user", "content": (
+                    f"Question/Task: {user_message}\n\n"
+                    f"Provided Answer: {resp}\n\n"
+                    f"Is this answer correct and appropriate for the question/task? Answer with just 'yes' or 'no'."
+                )}
+            ]
+            
+            result = client.chat.completions.create(
+                model=self.llm_model_name,
+                messages=eval_prompt,
+                # temperature=0,
+                # max_tokens=5
+            )
+            
+            eval_response = result.choices[0].message.content.strip().lower()
+            reward = 1.0 if "yes" in eval_response else 0.0
+            rewards.append(reward)
+            
+            # please compare the eval_response with the ground truth answer
+            self.logger.info(f"LLM evaluation: '{resp}' vs '{ans}' -> {eval_response} (reward: {reward})")
+            
+            
+        return rewards
+    
+    def llm_verify_judge_reward_func(self, completions, answer, prompts, **kwargs) -> List[float]:
+        """Reward function that uses an LLM to verify answers by calculating the answer itself.
+        
+        Args:
+            completions: List of completion trajectories
+            answer: List of ground truth answers (not used in this implementation)
+            prompts: List of original prompts containing the questions
+            
+        Returns:
+            List of reward scores between 0.0 and 1.0
+        """
+        client = self._get_llm_client()
+        responses = [self.get_last_answer(c) for c in completions]
+        rewards = []
+        
+        for resp, prompt, ans in zip(responses, prompts, answer):
+            if resp is None:
+                rewards.append(0.0)
+                continue
+            
+            user_message = str(prompt)
+            
+
+            solve_prompt = [
+                {"role": "system", "content": (
+                    "You are an expert problem solver. Solve the given problem accurately and "
+                    "provide just the final numerical answer without any explanation or working."
+                )},
+                {"role": "user", "content": user_message}
+            ]
+            
+            solve_result = client.chat.completions.create(
+                model=self.llm_model_name,
+                messages=solve_prompt,
+                #temperature=0
+            )
+            
+            llm_answer = solve_result.choices[0].message.content.strip()
+            
+            # 步骤 2: 让 LLM 比较两个答案是否等价
+            compare_prompt = [
+                {"role": "system", "content": (
+                    "You are an expert evaluator. Compare the following two answers and determine if they are "
+                    "mathematically equivalent. Consider different formats of the same value as equivalent "
+                    "(e.g., '5', '5.0', 'five' are all equivalent). "
+                    "Answer with just 'yes' if they are equivalent, or 'no' if they are not."
+                )},
+                {"role": "user", "content": (
+                    f"The correct answer calculated is: {llm_answer}\n\n"
+                    f"The provided answer is: {resp}\n\n"
+                    f"Are these answers equivalent? Answer with just 'yes' or 'no'."
+                )}
+            ]
+            
+            compare_result = client.chat.completions.create(
+                model=self.llm_model_name,
+                messages=compare_prompt,
+                # temperature=0,
+                # max_tokens=5
+            )
+            
+            # 解析结果
+            eval_response = compare_result.choices[0].message.content.strip().lower()
+            reward = 1.0 if "yes" in eval_response else 0.0
+            rewards.append(reward)
+            
+            # 记录结果用于调试
+            self.logger.info(f"LLM verification: Ground truth answer: '{ans}', LLM answer: '{llm_answer}', User answer: '{resp}' -> {eval_response} (reward: {reward})")
                 
         return rewards
