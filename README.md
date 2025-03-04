@@ -2,6 +2,19 @@
 
 This repository contains a set of tools for reinforcement learning with LLMs in verifiable environments. 
 
+## Deliver Plan
+
+There are a number of features we're planning to support in the near future:
+- [ ] use LLM as judge for both outcome reward and process reward
+- [ ] Standard PPO with Outcome Reward (for long-horizon task training)
+- [ ] Develop RL algorithm to integrate both outcome reward and process reward for multi-step agent training
+- [ ] Support veRL to large-scale training 
+
+## Resources (we can refer to)
+
+- [ ] Prime and [Pure](https://github.com/CJReinforce/PURE) 
+- [ ] The implementation of PRIME in TRL: [Pure](https://github.com/huggingface/trl/tree/prime)
+
 ## Installation
 
 PyPI [coming soon](https://pypi.org/project/verifiers/) once a couple more features are added, just clone it for now and run:
