@@ -3,6 +3,7 @@ from .envs.code_env import CodeEnv
 from .envs.doublecheck_env import DoubleCheckEnv
 from .envs.math_env import MathEnv
 from .envs.simple_env import SimpleEnv
+from .envs.llm_env import LLM_Env
 from .envs.tool_env import ToolEnv
 from .trainers.grpo_env_trainer import GRPOEnvTrainer
 from .utils.data_utils import extract_boxed_answer, extract_hash_answer, preprocess_dataset
@@ -21,6 +22,7 @@ __all__ = [
     "CodeEnv",
     "DoubleCheckEnv",
     "MathEnv",
+    "LLM_Env",
     "SimpleEnv",
     "ToolEnv",
     "GRPOEnvTrainer",
