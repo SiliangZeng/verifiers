@@ -6,14 +6,13 @@ This repository contains a set of tools for reinforcement learning with LLMs in 
 
 There are a number of features we're planning to support in the near future:
 - [ ] use LLM as judge for both outcome reward and process reward
-- [ ] Standard PPO with Outcome Reward (for long-horizon task training)
-- [ ] Develop RL algorithm to integrate both outcome reward and process reward for multi-step agent training
+- [ ] Integrate LLM-as-judge into the tool-use env
+- [ ] develop multi-step GRPO + process reawrd (llm verifier)
 - [ ] Support veRL to large-scale training 
 
 ## Resources (we can refer to)
 
-- [ ] Prime and [Pure](https://github.com/CJReinforce/PURE) 
-- [ ] The implementation of PRIME in TRL: [Pure](https://github.com/huggingface/trl/tree/prime)
+- [ ] [Prime](https://github.com/huggingface/trl/tree/prime) and [Pure](https://github.com/CJReinforce/PURE) 
 
 ## Installation
 

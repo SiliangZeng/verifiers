@@ -31,14 +31,16 @@ class LLMRubric(Rubric):
         # Set up reward functions
         self.reward_funcs = [
             #self.exact_answer_reward_func,  # Exact string matching (traditional)
-            self.llm_verify_judge_reward_func,    # LLM-based semantic evaluation
+            self.exact_answer_reward_func,    # LLM-based semantic evaluation
+            self.llm_reasoning_reward_func,
             self.int_answer_reward_func,
             self.parser.get_format_reward_func(),  # Check format compliance
             self.parser.get_xml_reward_func()      # Check XML structure
         ]
         
         # # Optional: set weights for the reward functions
-        # self.reward_weights = [0.4, 0.4, 0.1, 0.1]  # Prioritize accuracy
+        #self.reward_weights = [0.4, 0.4, 0.1, 0.1]  # Prioritize accuracy
+        #self.reward_weights = [0.4, 0.4, 0.1, 0.1, 0.1]
 
     def _get_llm_client(self):
         """Lazy initialization of the LLM client."""
@@ -59,6 +61,17 @@ class LLMRubric(Rubric):
             self.llm_client = OpenAI(api_key=os.environ["LLM_API_KEY"], base_url=url)
         
         return self.llm_client
+    
+    def get_reasoning(self, trajectory: List[Dict[str, str]]) -> str | None:
+        """Extract the reasoning steps from a trajectory."""
+        for msg in reversed(trajectory):
+            if msg['role'] == 'assistant':
+                if self.parser is None:
+                    raise ValueError("Parser is not set")
+                parsed = self.parser.parse(msg['content'])
+                if hasattr(parsed, 'reasoning') and parsed.reasoning is not None:
+                    return parsed.reasoning
+        return None
 
     def llm_answer_reward_func(self, completions, answer, **kwargs) -> List[float]:
         """Reward function that uses an LLM to evaluate if the answer is correct.
@@ -72,11 +85,9 @@ class LLMRubric(Rubric):
         """
         
         
-        
         """Reward function that checks if the final answer matches the expected answer."""
         # responses = [self.get_last_answer(c) for c in completions]
         # return [1.0 if str(r) == str(a) else 0.0 for r, a in zip(responses, answer)]
-        
         
         
         client = self._get_llm_client()
@@ -134,7 +145,6 @@ class LLMRubric(Rubric):
         client = self._get_llm_client()
         responses = [self.get_last_answer(c) for c in completions]
         rewards = []
-        
         
         for resp, prompt, ans in zip(responses, prompts, answer):
             if resp is None:
@@ -195,10 +205,11 @@ class LLMRubric(Rubric):
             {"role": "system", "content": (
                 "You are an expert problem solver. Solve the given problem carefully and accurately. "
                 "First, show your reasoning process to work through the problem step by step. "
-                "Then, provide your final answer clearly separated from your reasoning. "
+                "Then, provide your final answer as an INTEGER NUMBER (no decimals, no text, just digits). "
                 "Format your response as follows:\n\n"
                 "<reasoning>\n[Your detailed reasoning process]\n</reasoning>\n\n"
-                "<answer>\n[Your final numerical or text answer only]\n</answer>"
+                "<answer>\n[Your final answer as an integer, e.g., 42, 7, 100]\n</answer>\n\n"
+                "Remember: The answer must be ONLY digits, no text, no decimals, no special characters."
             )},
             {"role": "user", "content": user_message}
         ]
@@ -227,3 +238,95 @@ class LLMRubric(Rubric):
             self.logger.info(f"LLM verification: Ground truth: '{ans}', LLM answer: '{extracted_answer}', User answer: '{user_resp}' -> Matched: {reward == 1.0}")
                 
         return rewards
+    
+    
+    def llm_reasoning_reward_func(self, completions, prompts, **kwargs) -> List[float]:
+        """Reward function that uses an LLM to evaluate the reasoning process.
+        
+        Args:
+            completions: List of completion trajectories
+            prompts: List of original prompts containing the questions
+            
+        Returns:
+            List of reward scores between 0.0 and 1.0
+        """
+        client = self._get_llm_client()
+        reasonings = [self.get_reasoning(c) for c in completions]
+        rewards = []
+        
+        for reasoning, prompt in zip(reasonings, prompts):
+            if reasoning is None:
+                rewards.append(0.0)
+                continue
+                
+            user_message = str(prompt)
+            
+            # create the prompt for the LLM to evaluate the reasoning process
+            eval_prompt = [
+                {"role": "system", "content": (
+                    "You are an expert evaluator of mathematical reasoning. "
+                    "Your task is to evaluate the quality of a reasoning process for solving a given problem. "
+                    "Consider the following criteria:\n"
+                    "1. Logical Flow: Steps follow logically from one to the next\n"
+                    "2. Correctness: Mathematical operations and concepts are used correctly\n"
+                    "3. Completeness: All necessary steps are included\n"
+                    "4. Clarity: The reasoning is clear and well-explained\n\n"
+                    "Provide your evaluation in the following format:\n\n"
+                    "<reasoning>\n"
+                    "[Your detailed analysis of the reasoning process, discussing strengths and weaknesses "
+                    "based on the above criteria]\n"
+                    "</reasoning>\n\n"
+                    "<answer>\n"
+                    "[A single number between 0 and 0.5, where:\n"
+                    "0.5: Perfect reasoning with clear steps and correct logic\n"
+                    "0.35-0.45: Good reasoning with minor issues\n"
+                    "0.2-0.3: Acceptable but with significant gaps or errors\n"
+                    "0.05-0.15: Poor reasoning with major logical flaws\n"
+                    "0.0: No valid reasoning or completely incorrect]\n"
+                    "</answer>\n\n"
+                    "Important: The <answer> section must contain ONLY the numerical score (e.g., 0.4), "
+                    "no additional text or explanation."
+                )},
+                {"role": "user", "content": (
+                    f"Problem:\n{user_message}\n\n"
+                    f"Student's Reasoning Process:\n{reasoning}\n\n"
+                    f"Evaluate this reasoning process:"
+                )}
+            ]
+            
+            eval_result = client.chat.completions.create(
+                model=self.llm_model_name,
+                messages=eval_prompt,
+                # temperature=0
+            )
+            
+            # create a fake trajectory containing the LLM evaluation
+            eval_content = eval_result.choices[0].message.content.strip()
+            eval_trajectory = [{"role": "assistant", "content": eval_content}]
+            
+            # extract the score from the LLM evaluation
+            score_str = self.get_last_answer(eval_trajectory)
+            
+            # if score_str is not None and is a number between 0 and 1
+            if score_str is not None and 0 <= float(score_str.strip()) <= 0.5:
+                score = float(score_str.strip())
+                # ensure the score is between 0 and 1
+                score = max(0.0, min(0.5, score))
+                rewards.append(score)
+                
+                
+                
+                eval_reasoning = self.get_reasoning(eval_trajectory)
+                if eval_reasoning:
+                    self.logger.info(
+                        f"Reasoning evaluation:\nScore: {score:.2f}\n"
+                        f"Evaluation:\n{eval_reasoning}..."
+                    )
+            else:
+                self.logger.error("No score found in LLM evaluation")
+                self.logger.error(f"LLM evaluation: {score_str}")
+                rewards.append(0.0)
+                    
+        
+        return rewards
+    
