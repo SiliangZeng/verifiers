@@ -7,7 +7,7 @@ vf_env = vf.LLM_Env(dataset="gsm8k")
 dataset = vf_env.get_dataset()
 rubric = vf_env.get_rubric()
 
-run_name = "gsm8k_llm_judge_" + model_name.split("/")[-1].lower()
+run_name = "gsm8k_llm_outcome_verifier_" + model_name.split("/")[-1].lower()
 training_args = vf.get_default_grpo_config(run_name=run_name, num_gpus=8)
 trainer = vf.GRPOEnvTrainer(
     model=model,

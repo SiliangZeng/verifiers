@@ -189,58 +189,41 @@ class LLMRubric(Rubric):
         responses = [self.get_last_answer(c) for c in completions]
         rewards = []
         
-        for resp, prompt, ans in zip(responses, prompts, answer):
-            if resp is None:
+        user_message = str(prompts[0])
+            
+        solve_prompt = [
+            {"role": "system", "content": (
+                "You are an expert problem solver. Solve the given problem carefully and accurately. "
+                "First, show your reasoning process to work through the problem step by step. "
+                "Then, provide your final answer clearly separated from your reasoning. "
+                "Format your response as follows:\n\n"
+                "<reasoning>\n[Your detailed reasoning process]\n</reasoning>\n\n"
+                "<answer>\n[Your final numerical or text answer only]\n</answer>"
+            )},
+            {"role": "user", "content": user_message}
+        ]
+        
+        solve_result = client.chat.completions.create(
+            model=self.llm_model_name,
+            messages=solve_prompt,
+            #temperature=0
+        )
+        
+        llm_content = solve_result.choices[0].message.content.strip()
+            
+        llm_trajectory = [{"role": "assistant", "content": llm_content}]
+        
+        extracted_answer = self.get_last_answer(llm_trajectory)
+        
+        for user_resp, ans in zip(responses, answer):
+            if user_resp is None:
                 rewards.append(0.0)
                 continue
             
-            user_message = str(prompt)
-            
 
-            solve_prompt = [
-                {"role": "system", "content": (
-                    "You are an expert problem solver. Solve the given problem accurately and "
-                    "provide just the final numerical answer without any explanation or working."
-                )},
-                {"role": "user", "content": user_message}
-            ]
-            
-            solve_result = client.chat.completions.create(
-                model=self.llm_model_name,
-                messages=solve_prompt,
-                #temperature=0
-            )
-            
-            llm_answer = solve_result.choices[0].message.content.strip()
-            
-            # 步骤 2: 让 LLM 比较两个答案是否等价
-            compare_prompt = [
-                {"role": "system", "content": (
-                    "You are an expert evaluator. Compare the following two answers and determine if they are "
-                    "mathematically equivalent. Consider different formats of the same value as equivalent "
-                    "(e.g., '5', '5.0', 'five' are all equivalent). "
-                    "Answer with just 'yes' if they are equivalent, or 'no' if they are not."
-                )},
-                {"role": "user", "content": (
-                    f"The correct answer calculated is: {llm_answer}\n\n"
-                    f"The provided answer is: {resp}\n\n"
-                    f"Are these answers equivalent? Answer with just 'yes' or 'no'."
-                )}
-            ]
-            
-            compare_result = client.chat.completions.create(
-                model=self.llm_model_name,
-                messages=compare_prompt,
-                # temperature=0,
-                # max_tokens=5
-            )
-            
-            # 解析结果
-            eval_response = compare_result.choices[0].message.content.strip().lower()
-            reward = 1.0 if "yes" in eval_response else 0.0
+            reward = 1.0 if str(user_resp).strip() == str(extracted_answer).strip() else 0.0
             rewards.append(reward)
             
-            # 记录结果用于调试
-            self.logger.info(f"LLM verification: Ground truth answer: '{ans}', LLM answer: '{llm_answer}', User answer: '{resp}' -> {eval_response} (reward: {reward})")
+            self.logger.info(f"LLM verification: Ground truth: '{ans}', LLM answer: '{extracted_answer}', User answer: '{user_resp}' -> Matched: {reward == 1.0}")
                 
         return rewards
