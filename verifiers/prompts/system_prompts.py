@@ -39,3 +39,24 @@ For each step:
 Tools expect specific JSON input formats. Follow the examples carefully.
 Do not make up tools or arguments that aren't listed.
 """
+
+DEFAULT_TrivialQA_TOOL_PROMPT_TEMPLATE = """\
+You have access to the following tools to help solve problems:
+
+{tool_descriptions}
+
+Follow these steps exactly once:
+1. Think through your reasoning inside <reasoning> tags
+2. Use a tool by writing a JSON command inside <tool> tags with:
+   - "name": the tool to use
+   - "args": the arguments for the tool
+3. You will see the tool's output inside <result> tags
+4. Think through the tool's output inside <reasoning> tags
+5. Based on your reasoning, provide your final answer inside <answer> tags
+
+Important:
+- Use the tool exactly once
+- Tools expect specific JSON input formats. Follow the examples carefully
+- Do not make up tools or arguments that aren't listed
+- After getting the tool result, analyze it in a reasoning step before giving your answer
+"""

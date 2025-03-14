@@ -84,5 +84,20 @@ def preprocess_dataset(dataset_name: str = "gsm8k",
             "answer": x["answerKey"]
         })
         return dataset
+    elif dataset_name == "triviaqa":
+        # load_dataset("mandarjoshi/trivia_qa", "rc", split="train")
+        dataset: Dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split="train") # type: ignore
+        
+        def format_triviaqa_question(example):
+            question_text = example['question']
+            
+            question = f"Question: {question_text}\n"
+            return question
+        
+        dataset = dataset.map(lambda x: {
+            "prompt": format_prompt(format_triviaqa_question(x), system_prompt, few_shot, fewshot_prob),
+            "answer": x["answer"]["normalized_aliases"]
+        })
+        return dataset
     else:
         raise ValueError(f"Dataset {dataset_name} not supported for preprocess_dataset.")

@@ -15,6 +15,7 @@ build/
 *.pyo
 *.pyd
 *.pyc
+*.log
 
 # outputs
 wandb/

@@ -1,16 +1,20 @@
 import os
 import verifiers as vf
 
-if os.getenv("BRAVE_API_KEY"):
-    print("Using Brave as a search engine. BRAVE_API_KEY must be set. See https://brave.com/search/api/")
-    from verifiers.tools import search_brave as search 
-else:
-    print(
-        "WARNING: Using DuckDuckGo as a search engine. \
-        This may be rate limited (which can cause training to fail). \
-        Consider setting a paid BRAVE_API_KEY (https://brave.com/search/api/) to use Brave instead."
-    )
-    from verifiers.tools import search_ddg as search 
+from verifiers.rubrics import TrivialQAToolRubric
+
+# if os.getenv("BRAVE_API_KEY"):
+#     print("Using Brave as a search engine. BRAVE_API_KEY must be set. See https://brave.com/search/api/")
+#     from verifiers.tools import search_brave as search 
+# else:
+#     print(
+#         "WARNING: Using DuckDuckGo as a search engine. \
+#         This may be rate limited (which can cause training to fail). \
+#         Consider setting a paid BRAVE_API_KEY (https://brave.com/search/api/) to use Brave instead."
+#     )
+#     from verifiers.tools import search_ddg as search 
+
+from verifiers.tools import wiki_search as search 
 
 from verifiers.prompts import SEARCH_FEW_SHOT
 
@@ -26,7 +30,8 @@ vf_env = vf.ToolEnv(
 
 train_dataset = vf_env.get_dataset()
 # train_dataset = train_dataset.select(range(200))
-rubric = vf_env.get_rubric()
+rubric_class = TrivialQAToolRubric()
+rubric = rubric_class.get_reward_funcs()
 
 # notable defaults: lr = 1e-6, max_grad_norm = 0.01, constant lr 10 warmup steps, 1024 tokens in+out
 run_name = "triviaqa-brave-search_" + model_name.split("/")[-1].lower()
@@ -44,7 +49,7 @@ training_args.per_device_train_batch_size = 12
 training_args.gradient_accumulation_steps = 4
 # steps per global batch (1 on-policy, 1 off-policy)
 training_args.num_iterations = 2
-training_args.max_steps = 100
+training_args.max_steps = 500
 training_args.beta = 0.01
 trainer = vf.GRPOEnvTrainer(
     model=model,
