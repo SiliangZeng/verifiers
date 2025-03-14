@@ -49,7 +49,7 @@ training_args.per_device_train_batch_size = 12
 training_args.gradient_accumulation_steps = 4
 # steps per global batch (1 on-policy, 1 off-policy)
 training_args.num_iterations = 2
-training_args.max_steps = 500
+training_args.max_steps = 200
 training_args.beta = 0.01
 trainer = vf.GRPOEnvTrainer(
     model=model,

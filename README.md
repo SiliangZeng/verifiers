@@ -8,6 +8,8 @@ This repository contains a set of tools for reinforcement learning with LLMs in 
 
 - [X] New Example / Dataset: Wiki-Search + TriviaQA (check verifiers/examples/triviaqa_search.py)
 
+![Dataset format (Question and Acceptable Answers)](Figures/triviaqa_dataset.png)
+
 ![Results of Multi-Step GRPO on TriviaQA + Wiki-Search](Figures/triviaqa_results.png)
 
 
