@@ -22,7 +22,7 @@ cd verifiers
 uv sync
 uv pip install flash-attn --no-build-isolation
 source .venv/bin/activate
-accelerate launch --config-file configs/zero3.yaml --num-processes [N-1] verifiers/examples/gsm8k_calculator.py
+accelerate launch --config-file configs/zero3.yaml --num-processes [N-1] verifiers/examples/triviaqa_search.py
 ```
 
 
