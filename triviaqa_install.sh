@@ -1,7 +1,4 @@
-git clone https://github.com/SiliangZeng/verifiers.git
-cd verifiers
-
-# Install Java 21 (required for Pyserini)
+# Install Java 21 (required for Pyserini-Search), if you want to run the TriviaQA search example
 # First remove any old Java versions
 apt-get remove --purge openjdk*
 
@@ -33,9 +30,3 @@ uv pip install pyserini
 
 # Install flash-attn separately (requires special handling)
 uv pip install flash-attn --no-build-isolation
-
-# Activate the virtual environment
-source .venv/bin/activate
-
-# Run the TriviaQA search example
-accelerate launch --config-file configs/zero3.yaml --num-processes [N-1] verifiers/examples/triviaqa_search.py

@@ -8,6 +8,8 @@ This repository contains a set of tools for reinforcement learning with LLMs in 
 
 - [X] New Example / Dataset: Wiki-Search + TriviaQA (check verifiers/examples/triviaqa_search.py)
 
+- [X] This example supports local search so we can avoid the rate limit issue when using duckduckgo and also the cost for calling api when using brave
+
 ![Dataset format (Question and Acceptable Answers)](Figures/triviaqa_dataset.png)
 
 ![Results of Multi-Step GRPO on TriviaQA + Wiki-Search](Figures/triviaqa_results.png)
@@ -17,12 +19,44 @@ This repository contains a set of tools for reinforcement learning with LLMs in 
 
 PyPI [coming soon](https://pypi.org/project/verifiers/) once a couple more features are added, just clone it for now and run:
 ```
-git clone https://github.com/willccbb/verifiers.git
+git clone https://github.com/SiliangZeng/verifiers.git
 cd verifiers
+git checkout sz-dev-triviaqa
 uv sync
+uv pip install pyserini
 uv pip install flash-attn --no-build-isolation
-source .venv/bin/activate
-accelerate launch --config-file configs/zero3.yaml --num-processes [N-1] verifiers/examples/triviaqa_search.py
+```
+
+If you want to run the triviaqa-search example, please install java correctly:
+```
+# Install Java 21 (required for Pyserini-Search), if you want to run the TriviaQA search example
+# First remove any old Java versions
+apt-get remove --purge openjdk*
+
+# Add Java 21 repository
+apt-get update
+apt-get install -y wget gpg
+wget -O - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor | tee /etc/apt/trusted.gpg.d/adoptium.gpg > /dev/null
+echo "deb https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" | tee /etc/apt/sources.list.d/adoptium.list
+
+# Install Java 21
+apt-get update
+apt-get install -y temurin-21-jdk
+
+# Set Java environment variables
+export JAVA_HOME=/usr/lib/jvm/temurin-21-jdk-amd64
+export PATH=$JAVA_HOME/bin:$PATH
+export JAVA_OPTS="--add-modules jdk.incubator.vector -Xms4g -Xmx12g -XX:+UseG1GC"
+export JVM_PATH=/usr/lib/jvm/temurin-21-jdk-amd64/lib/server/libjvm.so
+export LD_LIBRARY_PATH=/usr/lib/jvm/temurin-21-jdk-amd64/lib/server:$LD_LIBRARY_PATH
+
+# Verify Java installation
+java -version
+```
+
+Once requirement for both env requirement and java is satisfied, you can run the triviaqa-search example:
+```
+./quickstart.sh
 ```
 
 
