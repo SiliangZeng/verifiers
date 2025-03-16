@@ -1,7 +1,7 @@
 [project]
 name = "verifiers"
 authors = [
-    {name = "William Brown", email = "williambrown97@gmail.com"},
+    {name = "Siliang Zeng", email = "zeng0176@umn.edu"},
 ]
 version = "0.1.0"
 description = "Verifiers for reinforcement learning with LLMs"
@@ -20,4 +20,5 @@ dependencies = [
     "liger-kernel>=0.5.2",
     "vllm>=0.7.3",
     "brave-search>=0.1.8",
+    "pyserini",
 ]
