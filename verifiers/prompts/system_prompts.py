@@ -55,8 +55,11 @@ Follow these steps exactly once:
 5. Based on your reasoning, provide your final answer inside <answer> tags
 
 Important:
-- Use the tool exactly once
+- Use the tool exactly once - DO NOT attempt to call the tool again even if the first search doesn't give helpful results
+- You must work with both your prior knowledge and whatever information the single tool call provides
+- If the tool doesn't return useful information, rely on your prior knowledge to answer
 - Tools expect specific JSON input formats. Follow the examples carefully
 - Do not make up tools or arguments that aren't listed
 - After getting the tool result, analyze it in a reasoning step before giving your answer
+- Your answer should match the expected ground-truth
 """
