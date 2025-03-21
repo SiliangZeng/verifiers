@@ -52,7 +52,7 @@ class TrivialQAToolRubric(ToolRubric):
             # Check if any of the accepted answers is contained in the response
             for a in a_list:
                 if str(a).lower() in r_lower:
-                    reward = 1
+                    reward = 0.5
                     break
             
             rewards.append(reward)
@@ -76,7 +76,7 @@ class TrivialQAToolRubric(ToolRubric):
             # Check if the response exactly matches any of the accepted answers
             for a in a_list:
                 if str(a).lower().strip() == r_lower:
-                    reward = 0.5
+                    reward = 1.0
                     break
             
             rewards.append(reward)
