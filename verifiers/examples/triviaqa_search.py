@@ -38,6 +38,8 @@ parser.add_argument('--max_steps', type=int, default=200,
                     help='Maximum number of training steps (default: 200)')
 parser.add_argument('--beta', type=float, default=0.01,
                     help='Beta parameter for KL divergence (default: 0.01)')
+parser.add_argument('--trainer', type=str, default="grpo",
+                    help='Trainer to use (default: grpo)')
 args = parser.parse_args()
 
 
@@ -86,13 +88,33 @@ print(f"  Num iterations: {training_args.num_iterations}")
 print(f"  Max steps: {training_args.max_steps}")
 print(f"  Beta: {training_args.beta}")
 
-trainer = vf.GRPOEnvTrainer(
-    model=model,
-    processing_class=tokenizer,
-    reward_funcs=rubric,
-    env=vf_env,
-    args=training_args,
-    train_dataset=train_dataset
-)
+
+if args.trainer == "grpo":
+    trainer = vf.GRPOEnvTrainer(
+        model=model,
+        processing_class=tokenizer,
+        reward_funcs=rubric,
+        env=vf_env,
+        args=training_args,
+        train_dataset=train_dataset
+    )    
+elif args.trainer == "remax":
+    trainer = vf.ReMaxEnvTrainer(
+        model=model,
+        processing_class=tokenizer,
+        reward_funcs=rubric,
+        env=vf_env,
+        args=training_args,
+        train_dataset=train_dataset
+    )
+elif args.trainer == "rloo":
+    trainer = vf.RLOOEnvTrainer(
+        model=model,
+        processing_class=tokenizer,
+        reward_funcs=rubric,
+        env=vf_env,
+        args=training_args,
+        train_dataset=train_dataset
+    )
 trainer.train() 
 

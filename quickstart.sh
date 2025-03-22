@@ -9,6 +9,7 @@ GRAD_ACCUM_STEPS=${5:-"4"}
 NUM_ITERATIONS=${6:-"2"}
 MAX_STEPS=${7:-"200"}
 BETA=${8:-"0"}
+TRAINER=${9:-"grpo"}
 
 # Get the number of GPUs on the machine minus 1
 source .venv/bin/activate
@@ -26,4 +27,5 @@ accelerate launch --config-file configs/zero3.yaml --num-processes ${NUM_GPUS_MI
   --grad_accum_steps ${GRAD_ACCUM_STEPS} \
   --num_iterations ${NUM_ITERATIONS} \
   --max_steps ${MAX_STEPS} \
-  --beta ${BETA}
+  --beta ${BETA} \
+  --trainer ${TRAINER}
