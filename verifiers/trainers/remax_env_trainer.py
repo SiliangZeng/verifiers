@@ -52,6 +52,11 @@ class ReMaxEnvTrainer(GRPOTrainer):
             raise ValueError("vLLM must be enabled for ReMaxEnvTrainer")
         if not (callable(reward_funcs) or (isinstance(reward_funcs, list) and all(callable(f) for f in reward_funcs))): 
             raise ValueError("reward_funcs must be a function or a list of functions. Use vLLM to host neural reward models.")
+    
+        # args.num_generations = 1
+        args.num_generations = args.num_generations + 1
+        # args.num_iterations = 2, to meet the requirements of the grpo trainer in line 418-426
+        
         super().__init__(
             model=model,
             reward_funcs=reward_funcs,
@@ -71,6 +76,8 @@ class ReMaxEnvTrainer(GRPOTrainer):
             guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
         else:
             guided_decoding = None
+        
+        self.num_generations = 1
         
         # random sampling
         self.random_sampling_params = SamplingParams(
