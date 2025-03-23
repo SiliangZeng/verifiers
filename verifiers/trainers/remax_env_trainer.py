@@ -67,9 +67,10 @@ class ReMaxEnvTrainer(GRPOTrainer):
         )
         self.env = env
         
-        self.sampling_params.num_generations = 1
-        self.greedy_sampling_params = self.sampling_params.clone()
-        self.greedy_sampling_params.temperature = 0.0
+        if self.accelerator.is_main_process:
+            self.sampling_params.n = 1
+            self.greedy_sampling_params = self.sampling_params.clone()
+            self.greedy_sampling_params.temperature = 0.0
 
     def _generate_and_score_completions(
          self, inputs: dict[str, Union[torch.Tensor, Any]]   
