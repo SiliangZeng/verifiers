@@ -26,10 +26,6 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
-if is_vllm_available():
-    from vllm import LLM, SamplingParams
-    from vllm.sampling_params import GuidedDecodingParams
-
 
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
@@ -55,7 +51,7 @@ class ReMaxEnvTrainer(GRPOTrainer):
     
         # args.num_generations = 1
         args.num_generations = args.num_generations + 1
-        # args.num_iterations = 2, to meet the requirements of the grpo trainer in line 418-426
+        # args.num_generations = 2, to meet the requirements of the grpo trainer in line 418-426
         
         super().__init__(
             model=model,
@@ -71,37 +67,9 @@ class ReMaxEnvTrainer(GRPOTrainer):
         )
         self.env = env
         
-        # Guided decoding, if enabled
-        if args.vllm_guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
-        else:
-            guided_decoding = None
-        
-        self.num_generations = 1
-        
-        # random sampling
-        self.random_sampling_params = SamplingParams(
-            max_tokens=self.max_completion_length,
-            guided_decoding=guided_decoding,
-            n=1,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=-1 if args.top_k is None else args.top_k,
-            min_p=0.0 if args.min_p is None else args.min_p,
-            repetition_penalty=args.repetition_penalty,
-        )
-        
-        # greedy sampling
-        self.greedy_sampling_params = SamplingParams(
-            max_tokens=self.max_completion_length,
-            guided_decoding=guided_decoding,
-            n=1,
-            temperature=0.0,
-            top_p=args.top_p,
-            top_k=-1 if args.top_k is None else args.top_k,
-            min_p=0.0 if args.min_p is None else args.min_p,
-            repetition_penalty=args.repetition_penalty,
-        )
+        self.sampling_params.num_generations = 1
+        self.greedy_sampling_params = self.sampling_params.clone()
+        self.greedy_sampling_params.temperature = 0.0
 
     def _generate_and_score_completions(
          self, inputs: dict[str, Union[torch.Tensor, Any]]   
@@ -129,7 +97,7 @@ class ReMaxEnvTrainer(GRPOTrainer):
             env_result = self.env.generate(
                 prompts=all_prompts,
                 llm=self.llm,
-                sampling_params=self.random_sampling_params,
+                sampling_params=self.sampling_params,
             )
             completion_ids = env_result['ids']
             completion_messages = env_result['messages']
