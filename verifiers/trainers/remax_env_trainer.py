@@ -66,35 +66,16 @@ class ReMaxEnvTrainer(GRPOTrainer):
         )
         self.env = env
         
-        # Guided decoding, if enabled
-        if args.vllm_guided_decoding_regex is not None:
-            guided_decoding = GuidedDecodingParams(backend="outlines", regex=args.vllm_guided_decoding_regex)
-        else:
-            guided_decoding = None
-        
-        # random sampling
-        self.random_sampling_params = SamplingParams(
-            max_tokens=self.max_completion_length,
-            guided_decoding=guided_decoding,
-            n=1,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=-1 if args.top_k is None else args.top_k,
-            min_p=0.0 if args.min_p is None else args.min_p,
-            repetition_penalty=args.repetition_penalty,
-        )
-        
-        # greedy sampling
-        self.greedy_sampling_params = SamplingParams(
-            max_tokens=self.max_completion_length,
-            guided_decoding=guided_decoding,
-            n=1,
-            temperature=0.0,
-            top_p=args.top_p,
-            top_k=-1 if args.top_k is None else args.top_k,
-            min_p=0.0 if args.min_p is None else args.min_p,
-            repetition_penalty=args.repetition_penalty,
-        )
+        # add a flag to initialize the greedy sampling params
+        self._init_greedy_sampling_params = True
+
+        # initialize the greedy sampling params
+        if hasattr(self, '_init_greedy_sampling_params') and self._init_greedy_sampling_params:
+            if is_vllm_available() and hasattr(self, 'sampling_params'):
+                self.greedy_sampling_params = self.sampling_params.clone()
+                self.greedy_sampling_params.temperature = 0.0
+                self.greedy_sampling_params.n = 1
+                self._init_greedy_sampling_params = False
 
     def _generate_and_score_completions(
          self, inputs: dict[str, Union[torch.Tensor, Any]]   
@@ -119,11 +100,13 @@ class ReMaxEnvTrainer(GRPOTrainer):
         # Gather the original prompts in message dict form, not the text form
         all_prompts = gather_object(prompts)
         if self.accelerator.is_main_process:
+            # here we use the default sampling params
             env_result = self.env.generate(
                 prompts=all_prompts,
                 llm=self.llm,
-                sampling_params=self.random_sampling_params,
+                sampling_params=self.sampling_params,
             )
+            
             completion_ids = env_result['ids']
             completion_messages = env_result['messages']
             completion_mask = env_result['mask']
@@ -137,6 +120,8 @@ class ReMaxEnvTrainer(GRPOTrainer):
         completion_messages = broadcast_object_list(completion_messages, from_process=0)
         completion_mask = broadcast_object_list(completion_mask, from_process=0)
 
+
+        # here we use the greedy sampling params
         if self.accelerator.is_main_process:
             env_result_baseline = self.env.generate(
                 prompts=all_prompts,
