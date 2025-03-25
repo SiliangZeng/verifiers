@@ -162,11 +162,11 @@ class RLOOEnvTrainer(GRPOTrainer):
 
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # type: ignore
-        # std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1) # type: ignore
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1) # type: ignore
 
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
-        # std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
         # advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
         
         # rloo is grpo with no std division
@@ -192,7 +192,7 @@ class RLOOEnvTrainer(GRPOTrainer):
             self._metrics[mode][f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
 
         self._metrics[mode]["reward"].append(rewards.mean().item())
-        # self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
 
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log = gather_object(prompts)
