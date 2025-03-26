@@ -24,9 +24,9 @@ java -version
 
 # Create a virtual environment named "triviaqa-env"
 
-uv sync
+# uv sync
 
-uv pip install pyserini
+# uv pip install pyserini
 
-# Install flash-attn separately (requires special handling)
-uv pip install flash-attn --no-build-isolation
+# # Install flash-attn separately (requires special handling)
+# uv pip install flash-attn --no-build-isolation

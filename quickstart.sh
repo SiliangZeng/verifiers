@@ -12,7 +12,7 @@ BETA=${8:-"0"}
 TRAINER=${9:-"grpo"}
 
 # Get the number of GPUs on the machine minus 1
-source .venv/bin/activate
+source activate verifier
 NUM_GPUS_MINUS_1=$(($(nvidia-smi --list-gpus | wc -l) - 1))
 NUM_GPUS=$((NUM_GPUS_MINUS_1 + 1))
 echo "Using ${NUM_GPUS_MINUS_1} GPUs for training with model ${MODEL_NAME}"
