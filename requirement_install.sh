@@ -2,7 +2,7 @@
 
 conda create -n verifier_env python=3.11 -y
 
-conda activate verifier_env
+source activate verifier_env
 
 
 conda install pytorch torchvision torchaudio
