@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Get command line arguments for model name, with default
-MODEL_NAME=${1:-"Qwen/Qwen2.5-7B-Instruct"}
+MODEL_NAME=${1:-"Qwen/Qwen2.5-7B"}
 LEARNING_RATE=${2:-"1e-6"}
 NUM_GENERATIONS=${3:-"21"}
 BATCH_SIZE=${4:-"12"}
 GRAD_ACCUM_STEPS=${5:-"4"}
 NUM_ITERATIONS=${6:-"2"}
 MAX_STEPS=${7:-"200"}
-BETA=${8:-"0.01"}
+BETA=${8:-"0"}
 STEP_ADV_COE=${9:-"0"}  # Default step advantage coefficient is 0.5
 
 # Get the number of GPUs on the machine

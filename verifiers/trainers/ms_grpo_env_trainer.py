@@ -112,6 +112,57 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             prompt_completion_ids, attention_mask, logits_to_keep
         )
         
+        # 特殊处理 step_advantage_coe=0 的情况，使其与 GRPO 计算方式保持一致
+        if self.step_advantage_coe == 0:
+            # 将 step 和 outcome reward functions 合并
+            combined_reward_funcs = self.outcome_reward_funcs  # 当 step_advantage_coe=0 时，只使用 outcome reward
+            
+            # 合并计算所有 reward
+            rewards_combined = self._calculate_rewards(
+                prompts, completion_messages, combined_reward_funcs, inputs
+            )
+            
+            # 应用权重并求和
+            combined_rewards = (rewards_combined * self.outcome_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+            
+            # 计算标准化的优势
+            combined_advantages = self._compute_normalized_advantages(combined_rewards, len(prompts))
+            
+            # 扩展优势到所有 token
+            expanded_advantages = torch.zeros_like(completion_mask, dtype=torch.float32)
+            for i in range(len(prompts)):
+                expanded_advantages[i] = combined_advantages[i].item() * torch.ones_like(completion_mask[i], dtype=torch.float32)
+            
+            # 记录日志指标（为保持一致，仍然计算 step_rewards，但不用于训练）
+            rewards_step = torch.zeros(len(prompts), len(self.step_reward_funcs), device=device)
+            if len(self.step_reward_funcs) > 0:
+                rewards_step = self._calculate_rewards(
+                    prompts, completion_messages, self.step_reward_funcs, inputs
+                )
+            
+            step_rewards = torch.zeros(len(prompts), device=device)
+            if len(self.step_reward_funcs) > 0:
+                step_rewards = (rewards_step * self.step_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+            
+            outcome_rewards = combined_rewards
+            
+            # 记录日志
+            self._log_metrics(
+                prompts, completion_messages, completion_mask,
+                rewards_step, rewards_combined, step_rewards, outcome_rewards
+            )
+            
+            return {
+                "prompt_ids": prompt_ids,
+                "prompt_mask": prompt_mask,
+                "completion_ids": completion_ids,
+                "completion_mask": completion_mask,
+                "old_per_token_logps": old_per_token_logps,
+                "ref_per_token_logps": ref_per_token_logps,
+                "advantages": expanded_advantages,
+            }
+        
+        # 原始逻辑，当 step_advantage_coe 不为 0 时使用
         # Calculate step rewards and outcome rewards separately
         rewards_step = self._calculate_rewards(
             prompts, completion_messages, self.step_reward_funcs, inputs
@@ -129,12 +180,12 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         step_advantages = self._compute_normalized_advantages(step_rewards, len(prompts))
         outcome_advantages = self._compute_normalized_advantages(outcome_rewards, len(prompts))
         
-        # Find the positions of <result> tags in each completion
+        # Find the positions of <r> tags in each completion
         result_positions = self._find_result_positions(completion_ids, completion_messages)
         
-        # Apply the combined advantages based on <result> tag positions
-        # If there's a <result>, tokens before get step+outcome advantage, after get only outcome
-        # If no <result>, all tokens get only outcome advantage
+        # Apply the combined advantages based on <r> tag positions
+        # If there's a <r>, tokens before get step+outcome advantage, after get only outcome
+        # If no <r>, all tokens get only outcome advantage
         combined_advantages = self._combine_advantages(
             completion_mask, step_advantages, outcome_advantages, result_positions
         )
