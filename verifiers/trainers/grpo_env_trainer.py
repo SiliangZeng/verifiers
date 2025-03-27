@@ -155,13 +155,13 @@ class GRPOEnvTrainer(GRPOTrainer):
             output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs) # type: ignore
             rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
 
-        rewards_per_func = gather(rewards_per_func)
+        rewards_per_func = gather(rewards_per_func) 
 
-        # Apply weights to each reward function's output and sum
-        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+        # Apply weights to each reward function's output and sum 
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1) 
 
         # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # type: ignore
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # type: ignore 
         std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1) # type: ignore
 
         # Normalize the rewards to compute the advantages

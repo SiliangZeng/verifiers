@@ -1,5 +1,16 @@
-# Install Java 21 (required for Pyserini-Search), if you want to run the TriviaQA search example
-# First remove any old Java versions
+#!/bin/bash
+
+conda create -n verifier_env python=3.11 -y
+
+source activate verifier_env
+
+
+conda install pytorch torchvision torchaudio
+
+
+pip install -r requirements.txt
+pip install flash-attn --no-build-isolation
+
 apt-get remove --purge openjdk*
 
 # Add Java 21 repository
@@ -21,12 +32,3 @@ export LD_LIBRARY_PATH=/usr/lib/jvm/temurin-21-jdk-amd64/lib/server:$LD_LIBRARY_
 
 # Verify Java installation
 java -version
-
-# Create a virtual environment named "triviaqa-env"
-
-# uv sync
-
-# uv pip install pyserini
-
-# # Install flash-attn separately (requires special handling)
-# uv pip install flash-attn --no-build-isolation
