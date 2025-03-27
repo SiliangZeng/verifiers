@@ -57,6 +57,7 @@ step_reward_funcs = [
 
 # Outcome奖励函数: 其余所有奖励函数作为outcome reward
 outcome_reward_funcs = [
+    rubric_class.exist_answer_in_search_results,  # 答案是否存在于搜索结果中
     rubric_class.exist_answer_reward_func,  # 答案是否存在于生成内容中
     rubric_class.exact_match_reward_func,  # 答案是否精确匹配
     rubric_class.tool_execution_reward_func,  # 工具执行是否成功

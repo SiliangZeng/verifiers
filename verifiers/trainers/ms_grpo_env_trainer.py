@@ -126,8 +126,8 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         outcome_rewards = (rewards_outcome * self.outcome_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
         
         # Compute normalized advantages
-        step_advantages = self._compute_normalized_advantages(step_rewards)
-        outcome_advantages = self._compute_normalized_advantages(outcome_rewards)
+        step_advantages = self._compute_normalized_advantages(step_rewards, len(prompts))
+        outcome_advantages = self._compute_normalized_advantages(outcome_rewards, len(prompts))
         
         # Find the positions of <result> tags in each completion
         result_positions = self._find_result_positions(completion_ids, completion_messages)
@@ -269,7 +269,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         from accelerate.utils import gather
         return gather(rewards_per_func)
     
-    def _compute_normalized_advantages(self, rewards):
+    def _compute_normalized_advantages(self, rewards, slice_length=None):
         """Compute normalized advantages from rewards."""
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -282,8 +282,8 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
 
         # Slice to keep only the local part of the data
         process_slice = slice(
-            self.accelerator.process_index * len(rewards) // self.accelerator.num_processes,
-            (self.accelerator.process_index + 1) * len(rewards) // self.accelerator.num_processes,
+            self.accelerator.process_index * slice_length,
+            (self.accelerator.process_index + 1) * slice_length,
         )
         return advantages[process_slice]
     
