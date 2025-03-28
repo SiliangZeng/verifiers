@@ -66,7 +66,7 @@ outcome_reward_funcs = [
 ]
 
 # 配置训练参数
-run_name = "triviaqa-ms-grpo-wiki-search_" + model_name.split("/")[-1].lower()
+run_name = "ms-grpo-wiki-search_" + model_name.split("/")[-1].lower()
 training_args = vf.get_default_grpo_config(
     run_name=run_name,
     num_gpus=args.num_gpus
