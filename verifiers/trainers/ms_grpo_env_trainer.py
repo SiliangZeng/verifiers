@@ -152,6 +152,24 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
                 rewards_step, rewards_combined, step_rewards, outcome_rewards
             )
             
+            # # print the shape of the returned object
+            # print("\nShapes of returned objects:")
+            # print(f"prompt_ids shape: {prompt_ids.shape}")
+            # print(f"prompt_mask shape: {prompt_mask.shape}")
+            # print(f"completion_ids shape: {completion_ids.shape}")
+            # print(f"completion_mask shape: {completion_mask.shape}")
+            # print(f"old_per_token_logps shape: {old_per_token_logps.shape if old_per_token_logps is not None else 'None'}")
+            # print(f"ref_per_token_logps shape: {ref_per_token_logps.shape if ref_per_token_logps is not None else 'None'}")
+            # print(f"advantages shape: {combined_advantages.shape}")
+            # print(f"expanded_advantages shape: {expanded_advantages.shape}")
+            
+            # # print the first element of the advantages and expanded_advantages
+            # print(f"advantages[0]: {combined_advantages[0]}")
+            # print(f"expanded_advantages[0]: {expanded_advantages[0]}")
+            
+            # # quit 
+            # exit()
+            
             return {
                 "prompt_ids": prompt_ids,
                 "prompt_mask": prompt_mask,

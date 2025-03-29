@@ -175,6 +175,12 @@ class GRPOEnvTrainer(GRPOTrainer):
             (self.accelerator.process_index + 1) * len(prompts),
         )
         advantages = advantages[process_slice]
+        
+        # test whether the advantages are expanded correctly
+        
+        expanded_advantages = torch.zeros_like(completion_mask, dtype=torch.float32)
+        for i in range(len(prompts)):
+            expanded_advantages[i] = advantages[i].item() * torch.ones_like(completion_mask[i], dtype=torch.float32)
 
         # Log the metrics
         mode = "eval" if self.control.should_evaluate else "train"
@@ -223,5 +229,5 @@ class GRPOEnvTrainer(GRPOTrainer):
             "completion_mask": completion_mask,
             "old_per_token_logps": old_per_token_logps,
             "ref_per_token_logps": ref_per_token_logps,
-            "advantages": advantages,
+            "advantages": expanded_advantages,
         }
