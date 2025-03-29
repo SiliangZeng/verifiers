@@ -1,4 +1,5 @@
 from typing import Callable, Optional, Union, Any, List, Dict, Tuple
+import logging
 
 import torch
 from datasets import Dataset, IterableDataset
@@ -35,7 +36,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             step_reward_weights: Optional[List[float]] = None,
             outcome_reward_weights: Optional[List[float]] = None,
             # optional, default is 0.5
-            step_advantage_coe: Optional[float] = 0.5,
+            step_advantage_coe: Optional[float] = 0,
             args: Optional[GRPOConfig] = None,
             train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
             eval_dataset: Optional[Union[Dataset, IterableDataset]] = None,
@@ -112,6 +113,57 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             prompt_completion_ids, attention_mask, logits_to_keep
         )
         
+        # 特殊处理 step_advantage_coe=0 的情况，使其与 GRPO 计算方式保持一致
+        if self.step_advantage_coe == 0:
+            # 将 step 和 outcome reward functions 合并
+            combined_reward_funcs = self.outcome_reward_funcs  # 当 step_advantage_coe=0 时，只使用 outcome reward
+            
+            # 合并计算所有 reward
+            rewards_combined = self._calculate_rewards(
+                prompts, completion_messages, combined_reward_funcs, inputs
+            )
+            
+            # 应用权重并求和
+            combined_rewards = (rewards_combined * self.outcome_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+            
+            # 计算标准化的优势
+            combined_advantages = self._compute_normalized_advantages(combined_rewards, len(prompts))
+            
+            # # 扩展优势到所有 token
+            # expanded_advantages = torch.zeros_like(completion_mask, dtype=torch.float32)
+            # for i in range(len(prompts)):
+            #     expanded_advantages[i] = combined_advantages[i].item() * torch.ones_like(completion_mask[i], dtype=torch.float32)
+            
+            # 记录日志指标（为保持一致，仍然计算 step_rewards，但不用于训练）
+            rewards_step = torch.zeros(len(prompts), len(self.step_reward_funcs), device=device)
+            if len(self.step_reward_funcs) > 0:
+                rewards_step = self._calculate_rewards(
+                    prompts, completion_messages, self.step_reward_funcs, inputs
+                )
+            
+            step_rewards = torch.zeros(len(prompts), device=device)
+            if len(self.step_reward_funcs) > 0:
+                step_rewards = (rewards_step * self.step_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+            
+            outcome_rewards = combined_rewards
+            
+            # 记录日志
+            self._log_metrics(
+                prompts, completion_messages, completion_mask,
+                rewards_step, rewards_combined, step_rewards, outcome_rewards
+            )
+            
+            return {
+                "prompt_ids": prompt_ids,
+                "prompt_mask": prompt_mask,
+                "completion_ids": completion_ids,
+                "completion_mask": completion_mask,
+                "old_per_token_logps": old_per_token_logps,
+                "ref_per_token_logps": ref_per_token_logps,
+                "advantages": combined_advantages,
+            }
+        
+        # 原始逻辑，当 step_advantage_coe 不为 0 时使用
         # Calculate step rewards and outcome rewards separately
         rewards_step = self._calculate_rewards(
             prompts, completion_messages, self.step_reward_funcs, inputs
@@ -126,15 +178,15 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         outcome_rewards = (rewards_outcome * self.outcome_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
         
         # Compute normalized advantages
-        step_advantages = self._compute_normalized_advantages(step_rewards)
-        outcome_advantages = self._compute_normalized_advantages(outcome_rewards)
+        step_advantages = self._compute_normalized_advantages(step_rewards, len(prompts))
+        outcome_advantages = self._compute_normalized_advantages(outcome_rewards, len(prompts))
         
-        # Find the positions of <result> tags in each completion
+        # Find the positions of <r> tags in each completion
         result_positions = self._find_result_positions(completion_ids, completion_messages)
         
-        # Apply the combined advantages based on <result> tag positions
-        # If there's a <result>, tokens before get step+outcome advantage, after get only outcome
-        # If no <result>, all tokens get only outcome advantage
+        # Apply the combined advantages based on <r> tag positions
+        # If there's a <r>, tokens before get step+outcome advantage, after get only outcome
+        # If no <r>, all tokens get only outcome advantage
         combined_advantages = self._combine_advantages(
             completion_mask, step_advantages, outcome_advantages, result_positions
         )
@@ -269,7 +321,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         from accelerate.utils import gather
         return gather(rewards_per_func)
     
-    def _compute_normalized_advantages(self, rewards):
+    def _compute_normalized_advantages(self, rewards, slice_length=None):
         """Compute normalized advantages from rewards."""
         # Compute grouped-wise rewards
         mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -282,8 +334,8 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
 
         # Slice to keep only the local part of the data
         process_slice = slice(
-            self.accelerator.process_index * len(rewards) // self.accelerator.num_processes,
-            (self.accelerator.process_index + 1) * len(rewards) // self.accelerator.num_processes,
+            self.accelerator.process_index * slice_length,
+            (self.accelerator.process_index + 1) * slice_length,
         )
         return advantages[process_slice]
     
@@ -434,3 +486,74 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
                     }
                     df = pd.DataFrame(table)
                     wandb.log({"completions": wandb.Table(dataframe=df)})
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        if return_outputs:
+            raise ValueError("The GRPOTrainer does not support returning outputs")
+        # Compute the per-token log probabilities for the model
+
+        prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
+        completion_ids, completion_mask = inputs["completion_ids"], inputs["completion_mask"]
+        input_ids = torch.cat([prompt_ids, completion_ids], dim=1)
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
+        logits_to_keep = completion_ids.size(1)  # we only need to compute the logits for the completion tokens
+
+        per_token_logps = self._get_per_token_logps(model, input_ids, attention_mask, logits_to_keep)
+
+        # Compute the KL divergence between the model and the reference model
+        if self.beta != 0.0:
+            ref_per_token_logps = inputs["ref_per_token_logps"]
+            per_token_kl = (
+                torch.exp(ref_per_token_logps - per_token_logps) - (ref_per_token_logps - per_token_logps) - 1
+            )
+
+        # Compute the loss
+        advantages = inputs["advantages"]
+        # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's computation (see
+        # _generate_and_score_completions) and use per_token_logps.detach() instead.
+        old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
+        coef_1 = torch.exp(per_token_logps - old_per_token_logps)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+        
+        # 检查advantages的维度，如果是2维的，说明是已经扩展过的
+        if len(advantages.shape) == 2:
+            # 已经扩展过的advantages，直接使用
+            per_token_loss1 = coef_1 * advantages
+            per_token_loss2 = coef_2 * advantages
+        else:
+            # 未扩展的advantages，使用unsqueeze(1)扩展
+            per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+            per_token_loss2 = coef_2 * advantages.unsqueeze(1)
+            
+        per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
+        if self.beta != 0.0:
+            per_token_loss = per_token_loss + self.beta * per_token_kl
+        loss = (per_token_loss * completion_mask).sum() / completion_mask.sum()
+
+        # Log the metrics
+        mode = "eval" if self.control.should_evaluate else "train"
+
+        if self.beta != 0.0:
+            mean_kl = (per_token_kl * completion_mask).sum() / completion_mask.sum()
+            self._metrics[mode]["kl"].append(self.accelerator.gather_for_metrics(mean_kl).mean().item())
+
+        is_clipped = (per_token_loss1 < per_token_loss2).float()
+        clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
+        self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
+
+        # 添加详细的shape日志记录
+        if self.accelerator.is_main_process:
+            logging.info(f"Step: {self.state.global_step}")
+            logging.info(f"advantages shape: {advantages.shape}")
+            logging.info(f"old_per_token_logps shape: {old_per_token_logps.shape}")
+            logging.info(f"per_token_logps shape: {per_token_logps.shape}")
+            logging.info(f"coef_1 shape: {coef_1.shape}")
+            logging.info(f"coef_2 shape: {coef_2.shape}")
+            logging.info(f"per_token_loss1 shape: {per_token_loss1.shape}")
+            logging.info(f"per_token_loss2 shape: {per_token_loss2.shape}")
+            logging.info(f"per_token_loss shape: {per_token_loss.shape}")
+            if self.beta != 0.0:
+                logging.info(f"per_token_loss after KL shape: {per_token_loss.shape}")
+            logging.info(f"final loss shape: {loss.shape}")
+
+        return loss
