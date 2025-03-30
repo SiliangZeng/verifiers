@@ -130,9 +130,9 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             combined_advantages = self._compute_normalized_advantages(combined_rewards, len(prompts))
             
             # # 扩展优势到所有 token
-            # expanded_advantages = torch.zeros_like(completion_mask, dtype=torch.float32)
-            # for i in range(len(prompts)):
-            #     expanded_advantages[i] = combined_advantages[i].item() * torch.ones_like(completion_mask[i], dtype=torch.float32)
+            expanded_advantages = torch.zeros_like(completion_mask, dtype=torch.float32)
+            for i in range(len(prompts)):
+                expanded_advantages[i] = combined_advantages[i].item() * torch.ones_like(completion_mask[i], dtype=torch.float32)
             
             # 记录日志指标（为保持一致，仍然计算 step_rewards，但不用于训练）
             rewards_step = torch.zeros(len(prompts), len(self.step_reward_funcs), device=device)
@@ -160,7 +160,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
                 "completion_mask": completion_mask,
                 "old_per_token_logps": old_per_token_logps,
                 "ref_per_token_logps": ref_per_token_logps,
-                "advantages": combined_advantages,
+                "advantages": expanded_advantages,
             }
         
         # 原始逻辑，当 step_advantage_coe 不为 0 时使用
