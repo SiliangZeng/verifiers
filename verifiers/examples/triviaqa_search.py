@@ -65,7 +65,14 @@ parser.add_argument(
 parser.add_argument(
     "--trainer", type=str, default="grpo", help="Trainer to use (default: grpo)"
 )
+parser.add_argument(
+    "--step_advantage_coe",
+    type=float,
+    default=0.1,
+    help="Step advantage coefficient (default: 0.1)",
+)
 args = parser.parse_args()
+args.step_advantage_coe = 1
 
 
 model_name = args.model_name
@@ -84,11 +91,25 @@ train_dataset = vf_env.get_dataset()
 rubric_class = TrivialQAToolRubric()
 rubric = rubric_class.get_reward_funcs()
 
+step_reward_funcs = [
+    rubric_class.tool_execution_reward_func,
+    rubric_class.exist_answer_in_search_results,
+]
+
+outcome_reward_funcs = [
+    rubric_class.exist_answer_reward_func,
+    rubric_class.exact_match_reward_func,
+    rubric_class.parser.get_format_reward_func(),
+    rubric_class.parser.get_xml_reward_func(),
+]
+
+
 # notable defaults: lr = 1e-6, max_grad_norm = 0.01, constant lr 10 warmup steps, 1024 tokens in+out
-run_name = "triviaqa-local-wiki-search_" + model_name.split("/")[-1].lower() + "_" + args.trainer
-training_args = vf.get_default_grpo_config(
-    run_name=run_name,
-    num_gpus=args.num_gpus
+run_name = (
+    "triviaqa-local-wiki-search_"
+    + model_name.split("/")[-1].lower()
+    + "_"
+    + args.trainer
 )
 training_args = vf.get_default_grpo_config(run_name=run_name, num_gpus=args.num_gpus)
 training_args.learning_rate = args.learning_rate
@@ -103,6 +124,8 @@ training_args.gradient_accumulation_steps = args.gradient_accumulation_steps
 training_args.num_iterations = args.num_iterations
 training_args.max_steps = args.max_steps
 training_args.beta = args.beta
+# training_args.wandb = "none"
+
 
 print(f"Training configuration:")
 print(f"  Learning rate: {training_args.learning_rate}")
@@ -115,19 +138,31 @@ print(f"  Max steps: {training_args.max_steps}")
 print(f"  Beta: {training_args.beta}")
 
 
-trainer_class = {
-    "grpo": vf.GRPOEnvTrainer,
-    "remax": vf.ReMaxEnvTrainer,
-    "rloo": vf.RLOOEnvTrainer,
-}.get(args.trainer, vf.GRPOEnvTrainer)
+if args.trainer == "ms-grpo":
+    trainer = vf.MSGRPOEnvTrainer(
+        model=model,
+        processing_class=tokenizer,
+        env=vf_env,
+        step_reward_funcs=step_reward_funcs,
+        outcome_reward_funcs=outcome_reward_funcs,
+        step_advantage_coe=args.step_advantage_coe,
+        args=training_args,
+        train_dataset=train_dataset,
+    )
+else:
+    trainer_class = {
+        "grpo": vf.GRPOEnvTrainer,
+        "remax": vf.ReMaxEnvTrainer,
+        "rloo": vf.RLOOEnvTrainer,
+    }.get(args.trainer, vf.GRPOEnvTrainer)
 
-trainer = trainer_class(
-    model=model,
-    processing_class=tokenizer,
-    reward_funcs=rubric,
-    env=vf_env,
-    args=training_args,
-    train_dataset=train_dataset,
-)
+    trainer = trainer_class(
+        model=model,
+        processing_class=tokenizer,
+        reward_funcs=outcome_reward_funcs,
+        env=vf_env,
+        args=training_args,
+        train_dataset=train_dataset,
+    )
 
 trainer.train()

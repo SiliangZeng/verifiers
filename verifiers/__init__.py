@@ -7,6 +7,7 @@ from .envs.tool_env import ToolEnv
 from .trainers.grpo_env_trainer import GRPOEnvTrainer
 from .trainers.remax_env_trainer import ReMaxEnvTrainer
 from .trainers.rloo_env_trainer import RLOOEnvTrainer
+from .trainers.ms_grpo_env_trainer import MSGRPOEnvTrainer
 from .utils.data_utils import extract_boxed_answer, extract_hash_answer, preprocess_dataset
 from .utils.model_utils import get_model, get_tokenizer, get_model_and_tokenizer
 from .utils.config_utils import get_default_grpo_config
@@ -28,6 +29,7 @@ __all__ = [
     "GRPOEnvTrainer",
     "ReMaxEnvTrainer",
     "RLOOEnvTrainer",
+    "MSGRPOEnvTrainer",
     "get_model",
     "get_tokenizer",
     "get_model_and_tokenizer",
