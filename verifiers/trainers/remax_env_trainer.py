@@ -95,11 +95,13 @@ class ReMaxEnvTrainer(GRPOTrainer):
         # Gather the original prompts in message dict form, not the text form
         all_prompts = gather_object(prompts)
         if self.accelerator.is_main_process:
+            # here we use the default sampling params
             env_result = self.env.generate(
                 prompts=all_prompts,
                 llm=self.llm,
                 sampling_params=self.sampling_params,
             )
+            
             completion_ids = env_result['ids']
             completion_messages = env_result['messages']
             completion_mask = env_result['mask']
@@ -113,6 +115,8 @@ class ReMaxEnvTrainer(GRPOTrainer):
         completion_messages = broadcast_object_list(completion_messages, from_process=0)
         completion_mask = broadcast_object_list(completion_mask, from_process=0)
 
+
+        # here we use the greedy sampling params
         if self.accelerator.is_main_process:
             env_result_baseline = self.env.generate(
                 prompts=all_prompts,

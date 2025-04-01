@@ -9,16 +9,15 @@ GRAD_ACCUM_STEPS=${5:-"4"}
 NUM_ITERATIONS=${6:-"2"}
 MAX_STEPS=${7:-"200"}
 BETA=${8:-"0"}
-TRAINER=${9:-"grpo"}
 
 # Get the number of GPUs on the machine minus 1
-source activate verifier
+source .venv/bin/activate
 NUM_GPUS_MINUS_1=$(($(nvidia-smi --list-gpus | wc -l) - 1))
 NUM_GPUS=$((NUM_GPUS_MINUS_1 + 1))
-echo "Using ${NUM_GPUS_MINUS_1} GPUs for training with model ${MODEL_NAME}"
+echo "Using ${NUM_GPUS_MINUS_1} GPUs for ReMax training with model ${MODEL_NAME}"
 
 accelerate launch --config-file configs/zero3.yaml --num-processes ${NUM_GPUS_MINUS_1} \
-  verifiers/examples/triviaqa_search.py \
+  verifiers/examples/triviaqa_search_remax.py \
   --model_name "${MODEL_NAME}" \
   --num_gpus ${NUM_GPUS} \
   --learning_rate ${LEARNING_RATE} \
@@ -28,4 +27,3 @@ accelerate launch --config-file configs/zero3.yaml --num-processes ${NUM_GPUS_MI
   --num_iterations ${NUM_ITERATIONS} \
   --max_steps ${MAX_STEPS} \
   --beta ${BETA} \
-  --trainer ${TRAINER}
