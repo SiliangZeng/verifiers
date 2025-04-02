@@ -138,7 +138,7 @@ print(f"  Max steps: {training_args.max_steps}")
 print(f"  Beta: {training_args.beta}")
 
 
-if args.trainer == "ms-grpo":
+if args.trainer == "msgrpo":
     trainer = vf.MSGRPOEnvTrainer(
         model=model,
         processing_class=tokenizer,
