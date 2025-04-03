@@ -1,31 +1,57 @@
+import warnings
 from typing import Callable, Optional, Union, Any, List
-import logging
+
 from accelerate.utils import broadcast_object_list, gather, gather_object
 from datasets import Dataset, IterableDataset
+from peft import PeftConfig # type: ignore
 import torch
 from torch import nn
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    TrainerCallback,
-    is_wandb_available,
     Trainer,
+    TrainerCallback,
+    is_wandb_available
 )
-from transformers.utils import is_peft_available
-from trl import GRPOTrainer, GRPOConfig
-from trl.data_utils import apply_chat_template, maybe_apply_chat_template
+from verifiers import RewardFunc
+from verifiers.envs.environment import Environment
+from verifiers.utils.logging_utils import print_prompt_completions_sample
+from verifiers.imports import LLM, SamplingParams
+from verifiers.inference.vllm_client import VLLMClient
+
+# # monkey patch vllm client
+# import trl.extras.vllm_client
+# trl.extras.vllm_client.VLLMClient = VLLMClient
+
+from trl import GRPOConfig
+from trl.data_utils import maybe_apply_chat_template
 from trl.import_utils import is_rich_available
 from trl.trainer.utils import pad
 
-from verifiers.envs.environment import Environment
-from verifiers.utils.logging_utils import print_prompt_completions_sample
-from verifiers.trainers.grpo_env_trainer import GRPOEnvTrainer, RewardFunc
-
-if is_peft_available():
-    from peft import PeftConfig # type: ignore
+from .grpo_env_trainer import GRPOEnvTrainer
 
 if is_wandb_available():
     import wandb
+
+
+
+# torch.nanstd doesn't exist, so we define it here
+def nanstd(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the standard deviation of a tensor, ignoring NaNs. This function only supports 1D tensors.
+
+    Args:
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
+
+    Returns:
+        `torch.Tensor`:
+            Standard deviation of the tensor, ignoring NaNs.
+    """
+    variance = torch.nanmean((tensor - torch.nanmean(tensor, keepdim=True)) ** 2)  # Compute variance ignoring NaNs
+    count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
+    variance *= count / (count - 1)  # Bessel's correction
+    return torch.sqrt(variance)
 
 class MSGRPOEnvTrainer(GRPOEnvTrainer):
     """
@@ -233,7 +259,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         if self.accelerator.is_main_process:
             env_result = self.env.generate(
                 prompts=all_prompts,
-                llm=self.llm,
+                llm=self.vllm_client, # type: ignore
                 sampling_params=self.sampling_params,
             )
             completion_ids = env_result['ids']
@@ -315,8 +341,18 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             reward_kwargs = {key: [example[key] for example in inputs] for key in keys}  # type: ignore
             output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)  # type: ignore
             rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
-            
-        from accelerate.utils import gather
+        
+        # If all reward functions return None for a given row, issue a detailed warning
+        if torch.isnan(rewards_per_func).all(dim=1).any():
+            nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()} # type: ignore
+            row_reward_kwargs["prompt"] = prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = completions[nan_row_idx] # type: ignore
+            warnings.warn(
+                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+        
         return gather(rewards_per_func)
     
     def _compute_normalized_advantages(self, rewards, slice_length=None):
@@ -329,7 +365,9 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         # Normalize the rewards to compute the advantages
         mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+        if self.scale_rewards:
+            # Scale the rewards to be between 0 and 1
+            advantages = advantages / (std_grouped_rewards + 1e-4)
 
         # Slice to keep only the local part of the data
         process_slice = slice(
