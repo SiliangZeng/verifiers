@@ -359,12 +359,14 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         """Compute normalized advantages from rewards."""
         
         # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # type: ignore
 
         # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
+        advantages = (rewards - mean_grouped_rewards)
+        
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1) # type: ignore
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
         if self.scale_rewards:
             # Scale the rewards to be between 0 and 1
             advantages = advantages / (std_grouped_rewards + 1e-4)
@@ -553,7 +555,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         # _generate_and_score_completions) and use per_token_logps.detach() instead.
         old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
-        coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
+        coef_2 = torch.clamp(coef_1, 1 - self.epsilon_low, 1 + self.epsilon_high)
         
         # If the advantages are 1D, we need to unsqueeze it to match the shape of the per-token loss
         if advantages.dim() == 1:
