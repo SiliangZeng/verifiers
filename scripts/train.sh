@@ -2,9 +2,6 @@
 set -ex
 
 # Set Weights & Biases environment variables
-export WANDB_API_KEY="a98ea5d2a400c0eef0e40399bbb22aa66cf4faa3"
-export WANDB_ENTITY="weiquan0128-university-of-minnesota"
-export WANDB_PROJECT="verifier"
 
 
 # Get total number of GPUs
