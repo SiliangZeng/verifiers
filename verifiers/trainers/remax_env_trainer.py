@@ -1,35 +1,60 @@
+import warnings
 from typing import Callable, Optional, Union, Any, List
 
 from accelerate.utils import broadcast_object_list, gather, gather_object
 from datasets import Dataset, IterableDataset
+from peft import PeftConfig # type: ignore
 import torch
 from torch import nn
 from transformers import (
     PreTrainedModel,
     PreTrainedTokenizerBase,
-    TrainerCallback,
-    is_wandb_available,
     Trainer,
+    TrainerCallback,
+    is_wandb_available
 )
-from transformers.utils import is_peft_available
-from trl import GRPOTrainer, GRPOConfig
-from trl.data_utils import apply_chat_template, maybe_apply_chat_template
-from trl.import_utils import is_rich_available, is_vllm_available
-from trl.trainer.utils import pad
-
+from verifiers import RewardFunc
 from verifiers.envs.environment import Environment
 from verifiers.utils.logging_utils import print_prompt_completions_sample
+from verifiers.imports import LLM, SamplingParams
+from verifiers.inference.vllm_client import VLLMClient
 
-if is_peft_available():
-    from peft import PeftConfig # type: ignore
+# # monkey patch vllm client
+# import trl.extras.vllm_client
+# trl.extras.vllm_client.VLLMClient = VLLMClient
+
+from trl import GRPOConfig
+from trl.data_utils import maybe_apply_chat_template
+from trl.import_utils import is_rich_available
+from trl.trainer.utils import pad
+
+from .grpo_env_trainer import GRPOEnvTrainer
 
 if is_wandb_available():
     import wandb
 
 
-RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-class ReMaxEnvTrainer(GRPOTrainer):
+# torch.nanstd doesn't exist, so we define it here
+def nanstd(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Compute the standard deviation of a tensor, ignoring NaNs. This function only supports 1D tensors.
+
+    Args:
+        tensor (`torch.Tensor`):
+            Input tensor of shape `(N,)`.
+
+    Returns:
+        `torch.Tensor`:
+            Standard deviation of the tensor, ignoring NaNs.
+    """
+    variance = torch.nanmean((tensor - torch.nanmean(tensor, keepdim=True)) ** 2)  # Compute variance ignoring NaNs
+    count = torch.sum(~torch.isnan(tensor))  # Count of non-NaN values
+    variance *= count / (count - 1)  # Bessel's correction
+    return torch.sqrt(variance)
+
+
+class ReMaxEnvTrainer(GRPOEnvTrainer):
     def __init__(
             self,
             model: Union[str, PreTrainedModel],
@@ -44,14 +69,9 @@ class ReMaxEnvTrainer(GRPOTrainer):
             peft_config: Optional["PeftConfig"] = None,
             **kwargs,
     ):
-        if not args.use_vllm: # type: ignore
-            raise ValueError("vLLM must be enabled for ReMaxEnvTrainer")
-        if not (callable(reward_funcs) or (isinstance(reward_funcs, list) and all(callable(f) for f in reward_funcs))): 
-            raise ValueError("reward_funcs must be a function or a list of functions. Use vLLM to host neural reward models.")
-    
         # args.num_generations = 1
         args.num_generations = args.num_generations + 1
-        # args.num_generations = 2, to meet the requirements of the grpo trainer in line 418-426
+        # args.num_generations = 2, to meet the requirements of the grpo trainer in line 426-434
         
         super().__init__(
             model=model,
@@ -98,7 +118,7 @@ class ReMaxEnvTrainer(GRPOTrainer):
             # here we use the default sampling params
             env_result = self.env.generate(
                 prompts=all_prompts,
-                llm=self.llm,
+                llm=self.vllm_client, # type: ignore
                 sampling_params=self.sampling_params,
             )
             
@@ -120,7 +140,7 @@ class ReMaxEnvTrainer(GRPOTrainer):
         if self.accelerator.is_main_process:
             env_result_baseline = self.env.generate(
                 prompts=all_prompts,
-                llm=self.llm,
+                llm=self.vllm_client, # type: ignore
                 sampling_params=self.greedy_sampling_params,
             )
             completion_ids_baseline = env_result_baseline['ids']
@@ -196,7 +216,18 @@ class ReMaxEnvTrainer(GRPOTrainer):
             
             output_reward_func_baseline = reward_func(prompts=prompts, completions=completions_baseline, **reward_kwargs) # type: ignore
             rewards_per_func_baseline[:, i] = torch.tensor(output_reward_func_baseline, dtype=torch.float32, device=device)
-            
+        
+        # If all reward functions return None for a given row, issue a detailed warning
+        if torch.isnan(rewards_per_func).all(dim=1).any():
+            nan_row_idx = torch.isnan(rewards_per_func).all(dim=1).nonzero(as_tuple=True)[0][0]
+            row_reward_kwargs = {key: value[nan_row_idx] for key, value in reward_kwargs.items()} # type: ignore
+            row_reward_kwargs["prompt"] = prompts[nan_row_idx]
+            row_reward_kwargs["completion"] = completions[nan_row_idx] # type: ignore
+            warnings.warn(
+                f"All reward functions returned None for the following kwargs: {row_reward_kwargs}. "
+                "Please ensure that at least one reward function returns a valid reward."
+            )
+        
         rewards_per_func = gather(rewards_per_func)
         rewards_per_func_baseline = gather(rewards_per_func_baseline)
         
@@ -204,14 +235,6 @@ class ReMaxEnvTrainer(GRPOTrainer):
         rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
         rewards_baseline = (rewards_per_func_baseline * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1)
 
-        # # Compute grouped-wise rewards
-        # mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # type: ignore
-        # std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1) # type: ignore
-
-        # # Normalize the rewards to compute the advantages
-        # mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
-        # std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
-        # advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
 
         # compute advantages
         advantages = rewards - rewards_baseline
@@ -230,14 +253,16 @@ class ReMaxEnvTrainer(GRPOTrainer):
         completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item() # type: ignore
         self._metrics[mode]["completion_length"].append(completion_length)
 
-        reward_per_func = rewards_per_func.mean(0) # type: ignore
+        # Calculate mean reward per function, but only for samples where the function was applied
         for i, reward_func in enumerate(self.reward_funcs):
-            reward_func_name = reward_func.__name__ # type: ignore
-            self._metrics[mode][f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
-
+            reward_func_name = reward_func.__name__ # type: ignore  
+            # Only calculate mean for samples where this reward function was applied (non-NaN values)
+            mean_rewards = torch.nanmean(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}"].append(mean_rewards)
+            std_rewards = nanstd(rewards_per_func[:, i]).item()
+            self._metrics[mode][f"rewards/{reward_func_name}/std"].append(std_rewards)
         self._metrics[mode]["reward"].append(rewards.mean().item())
-        # self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
-        self._metrics[mode]["reward_baseline"].append(rewards_baseline.mean().item())
+        self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item()) # type: ignore
 
         if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
             prompts_to_log = gather_object(prompts)
