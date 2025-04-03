@@ -1,7 +1,6 @@
 #!/bin/bash
 set -ex
 
-# Set Weights & Biases environment variables
 
 
 # Get total number of GPUs
@@ -13,6 +12,8 @@ set -ex
 
 export CUDA_VISIBLE_DEVICES=4,5,6,7
 TOTAL_GPUS=4
+
+conda activate verifier_env
 
 # per_device_train_batch_size * num-processes % num_generations == 0
 
@@ -28,7 +29,7 @@ accelerate launch --config-file configs/zero3.yaml --num-processes ${TOTAL_GPUS}
     --num_iterations 2 \
     --max_steps 200 \
     --beta 0 \
-    --trainer "grpo" \
+    --trainer "msgrpo" \
 
 # accelerate launch --config-file configs/zero3.yaml --num-processes ${NUM_PROCESSES} \
 #     verifiers/examples/triviaqa_search.py \

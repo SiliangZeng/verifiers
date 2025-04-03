@@ -3,6 +3,8 @@ set -ex
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3 
 
+conda activate verifier_env
+
 python verifiers/inference/vllm_serve.py \
     --model "Qwen/Qwen2.5-7B" \
     --tensor_parallel_size 4 \
