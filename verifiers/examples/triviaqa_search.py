@@ -159,9 +159,10 @@ else:
     trainer_class = {
         "grpo": vf.GRPOEnvTrainer,
         "remax": vf.ReMaxEnvTrainer,
-        "rloo": vf.RLOOEnvTrainer,
     }.get(args.trainer, vf.GRPOEnvTrainer)
 
+    if args.trainer == "rloo":
+        args.scale_rewards = False
     trainer = trainer_class(
         model=model,
         processing_class=tokenizer,
