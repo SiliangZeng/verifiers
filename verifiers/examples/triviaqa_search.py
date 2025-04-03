@@ -73,7 +73,7 @@ parser.add_argument(
     help="Step advantage coefficient (default: 0.1)",
 )
 args = parser.parse_args()
-args.step_advantage_coe = 1
+args.step_advantage_coe = 1.0
 
 
 model_name = args.model_name
@@ -100,6 +100,8 @@ step_reward_funcs = [
 ]
 
 outcome_reward_funcs = [
+    # rubric_class.tool_execution_reward_func,
+    # rubric_class.exist_answer_in_search_results,
     rubric_class.exist_answer_reward_func,
     rubric_class.exact_match_reward_func,
     rubric_class.parser.get_format_reward_func(),
@@ -127,6 +129,7 @@ training_args.gradient_accumulation_steps = args.gradient_accumulation_steps
 training_args.num_iterations = args.num_iterations
 training_args.max_steps = args.max_steps
 training_args.beta = args.beta
+# debugging without wandb
 # training_args.report_to = "none"
 
 training_args.vllm_server_host = "0.0.0.0"

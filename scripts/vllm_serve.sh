@@ -1,9 +1,11 @@
 #!/bin/bash
 set -ex
 
-export CUDA_VISIBLE_DEVICES=0,1,2,3 
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
+source $(conda info --base)/etc/profile.d/conda.sh
 conda activate verifier_env
+
 
 python verifiers/inference/vllm_serve.py \
     --model "Qwen/Qwen2.5-7B" \

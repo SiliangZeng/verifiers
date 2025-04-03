@@ -85,8 +85,7 @@ class ReMaxEnvTrainer(GRPOEnvTrainer):
             peft_config=peft_config,
             **kwargs,
         )
-        self.env = env
-        
+
         if self.accelerator.is_main_process:
             self.sampling_params.n = 1
             self.greedy_sampling_params = self.sampling_params.clone()

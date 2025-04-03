@@ -253,7 +253,7 @@ def preprocess_dataset(name: str = "gsm8k",
     elif name == "triviaqa":
         if split is None:
             split = "train"
-        dataset = load_dataset("mandarjoshi/trivia_qa", "rc", split=split) # type: ignore
+        dataset: Dataset = load_dataset("mandarjoshi/trivia_qa", "rc")[split] # type: ignore
     else:
         raise ValueError(f"Dataset {name} not supported for preprocess_dataset. \
                             Please ensure that the dataset is formatted with 'prompt' (str) and 'answer' (str) keys.")

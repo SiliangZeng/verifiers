@@ -153,11 +153,13 @@ class MultiStepEnv(Environment):
             state["completion_ids"].extend(list(llm_response.outputs[0].token_ids))
             state["completion_ids"] = state["completion_ids"][len(state["prompt_ids"]):]
 
-            if state["completion_ids"][-1] != 198 and state["completion_ids"][-2] != self.message_end_id:
-                state["completion_ids"].append(self.message_end_id)
-                state["completion_ids"].append(198)
-                state["completion_mask"].append(1)
-                state["completion_mask"].append(1)
+            if len(state["completion_ids"]) >= 2:
+                # 198 -> \n
+                if state["completion_ids"][-1] != 198 and state["completion_ids"][-2] != self.message_end_id:
+                    state["completion_ids"].append(self.message_end_id)
+                    state["completion_ids"].append(198)
+                    state["completion_mask"].append(1)
+                    state["completion_mask"].append(1)
 
             if len(state["completion_ids"]) > len(state["completion_mask"]): # type: ignore
                 state["completion_mask"].extend([1] * (len(state["completion_ids"]) - len(state["completion_mask"]))) # type: ignore
