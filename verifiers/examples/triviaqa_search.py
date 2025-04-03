@@ -3,6 +3,7 @@ import argparse
 import verifiers as vf
 
 from verifiers.rubrics import TrivialQAToolRubric
+from verifiers.utils import preprocess_dataset
 
 # if os.getenv("BRAVE_API_KEY"):
 #     print("Using Brave as a search engine. BRAVE_API_KEY must be set. See https://brave.com/search/api/")
@@ -79,8 +80,10 @@ model_name = args.model_name
 print(f"Using model: {model_name}")
 model, tokenizer = vf.get_model_and_tokenizer(model_name)
 
+dataset = preprocess_dataset("triviaqa", "train")
+
 vf_env = vf.ToolEnv(
-    dataset="triviaqa",
+    dataset=dataset,
     # few_shot=SEARCH_FEW_SHOT[0],
     tools=[search],
     max_steps=2,
@@ -124,7 +127,10 @@ training_args.gradient_accumulation_steps = args.gradient_accumulation_steps
 training_args.num_iterations = args.num_iterations
 training_args.max_steps = args.max_steps
 training_args.beta = args.beta
-# training_args.wandb = "none"
+# training_args.report_to = "none"
+
+training_args.vllm_server_host = "0.0.0.0"
+training_args.vllm_server_port = 8000
 
 
 print(f"Training configuration:")

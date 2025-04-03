@@ -2,7 +2,7 @@ from abc import ABC
 from typing import List, Dict
 import logging
 
-from trl.trainer.grpo_trainer import RewardFunc
+from verifiers import RewardFunc
 
 def equals_reward_func(completions, answer, **kwargs) -> List[float]:
     responses = [c[0]['content'] for c in completions]

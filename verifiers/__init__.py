@@ -1,3 +1,7 @@
+from typing import Callable, Union
+from transformers import PreTrainedModel
+RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
 from .envs.environment import Environment
 from .envs.code_env import CodeEnv
 from .envs.doublecheck_env import DoubleCheckEnv
