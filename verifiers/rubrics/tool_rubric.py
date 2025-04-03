@@ -183,20 +183,14 @@ class ToolRubric(Rubric):
                         if i + 1 < len(trajectory) and trajectory[i + 1]['role'] == 'user':
                             tool_attempts += 1
                             # Check response with env_parser
-                            multiplier = 1.0 
-                            response = str(parsed.tool)
-                            if (("sympy" in response) or ("numpy" in response)) and len(response) > 100:
-                                multiplier = 1.5
-                            else:
-                                multiplier = 0.5
                             parsed_response = self.env_parser.parse(trajectory[i + 1]['content'])
                             if hasattr(parsed_response, 'result') and parsed_response.result is not None and not parsed_response.result.startswith("Error:"):
-                                successful_executions += 1 * multiplier
+                                successful_executions += 1
             
             # Calculate reward
             if tool_attempts == 0:
                 return 0.0
-            return (successful_executions / tool_attempts)
+            return 0.2 * (successful_executions / tool_attempts)
         
         return [check_execution(c) for c in completions]
     
