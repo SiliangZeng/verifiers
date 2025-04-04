@@ -20,6 +20,8 @@ from trl.trainer.utils import pad
 from verifiers.envs.environment import Environment
 from verifiers.utils.logging_utils import print_prompt_completions_sample
 
+from .grpo_env_trainer import GRPOEnvTrainer
+
 if is_peft_available():
     from peft import PeftConfig # type: ignore
 
@@ -28,7 +30,7 @@ if is_wandb_available():
 
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-class RLOOEnvTrainer(GRPOTrainer):
+class RLOOEnvTrainer(GRPOEnvTrainer):
     def __init__(
             self,
             model: Union[str, PreTrainedModel],
@@ -43,12 +45,10 @@ class RLOOEnvTrainer(GRPOTrainer):
             peft_config: Optional["PeftConfig"] = None,
             **kwargs,
     ):
-        if not args.use_vllm: # type: ignore
-            raise ValueError("vLLM must be enabled for RLOOEnvTrainer")
-        if not (callable(reward_funcs) or (isinstance(reward_funcs, list) and all(callable(f) for f in reward_funcs))): 
-            raise ValueError("reward_funcs must be a function or a list of functions. Use vLLM to host neural reward models.")
+
         super().__init__(
             model=model,
+            env=env,
             reward_funcs=reward_funcs,
             args=args,
             train_dataset=train_dataset,
@@ -59,7 +59,6 @@ class RLOOEnvTrainer(GRPOTrainer):
             peft_config=peft_config,
             **kwargs,
         )
-        self.env = env
 
     def _generate_and_score_completions(
          self, inputs: dict[str, Union[torch.Tensor, Any]]   

@@ -66,13 +66,13 @@ parser.add_argument(
     "--trainer", type=str, default="grpo", help="Trainer to use (default: grpo)"
 )
 parser.add_argument(
-    "--step_advantage_coe",
+    "--step_advantage_coef",
     type=float,
     default=0.1,
     help="Step advantage coefficient (default: 0.1)",
 )
 args = parser.parse_args()
-args.step_advantage_coe = 1
+args.step_advantage_coef = 1
 
 
 model_name = args.model_name
@@ -91,17 +91,16 @@ train_dataset = vf_env.get_dataset()
 rubric_class = TrivialQAToolRubric()
 rubric = rubric_class.get_reward_funcs()
 
-step_reward_funcs = [
-    rubric_class.tool_execution_reward_func,
-    rubric_class.exist_answer_in_search_results,
-]
-
-outcome_reward_funcs = [
-    rubric_class.exist_answer_reward_func,
-    rubric_class.exact_match_reward_func,
-    rubric_class.parser.get_format_reward_func(),
-    rubric_class.parser.get_xml_reward_func(),
-]
+# step_reward_funcs = [
+#     rubric_class.tool_execution_reward_func,
+#     rubric_class.exist_answer_in_search_results,
+# ]
+# outcome_reward_funcs = [
+#     rubric_class.exist_answer_reward_func,
+#     rubric_class.exact_match_reward_func,
+#     rubric_class.parser.get_format_reward_func(),
+#     rubric_class.parser.get_xml_reward_func(),
+# ]
 
 
 # notable defaults: lr = 1e-6, max_grad_norm = 0.01, constant lr 10 warmup steps, 1024 tokens in+out
@@ -124,6 +123,8 @@ training_args.gradient_accumulation_steps = args.gradient_accumulation_steps
 training_args.num_iterations = args.num_iterations
 training_args.max_steps = args.max_steps
 training_args.beta = args.beta
+
+# debugging without wandb
 # training_args.wandb = "none"
 
 
@@ -143,9 +144,9 @@ if args.trainer == "msgrpo":
         model=model,
         processing_class=tokenizer,
         env=vf_env,
-        step_reward_funcs=step_reward_funcs,
-        outcome_reward_funcs=outcome_reward_funcs,
-        step_advantage_coe=args.step_advantage_coe,
+        reward_funcs=rubric,
+        use_step_rewards=True,
+        step_advantage_coef=args.step_advantage_coef,
         args=training_args,
         train_dataset=train_dataset,
     )
@@ -159,7 +160,7 @@ else:
     trainer = trainer_class(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=outcome_reward_funcs,
+        reward_funcs=rubric,
         env=vf_env,
         args=training_args,
         train_dataset=train_dataset,

@@ -1,5 +1,5 @@
 from typing import Callable, Optional, Union, Any, List
-import logging
+
 from accelerate.utils import broadcast_object_list, gather, gather_object
 from datasets import Dataset, IterableDataset
 import torch
@@ -19,7 +19,8 @@ from trl.trainer.utils import pad
 
 from verifiers.envs.environment import Environment
 from verifiers.utils.logging_utils import print_prompt_completions_sample
-from verifiers.trainers.grpo_env_trainer import GRPOEnvTrainer, RewardFunc
+
+from .grpo_env_trainer import GRPOEnvTrainer
 
 if is_peft_available():
     from peft import PeftConfig # type: ignore
@@ -27,59 +28,30 @@ if is_peft_available():
 if is_wandb_available():
     import wandb
 
+RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
+
 class MSGRPOEnvTrainer(GRPOEnvTrainer):
-    """
-    Multi-Step GRPO Environment Trainer that calculates separate advantages for 
-    step rewards and outcome rewards. Tokens before a '<result>' tag get
-    both advantages, tokens after only get outcome advantage.
-    """
     def __init__(
             self,
             model: Union[str, PreTrainedModel],
             env: Environment,
-            step_reward_funcs: Union[RewardFunc, List[RewardFunc]],
-            outcome_reward_funcs: Union[RewardFunc, List[RewardFunc]],
-            step_reward_weights: Optional[List[float]] = None,
-            outcome_reward_weights: Optional[List[float]] = None,
-            step_advantage_coef: Optional[float] = 0,
+            reward_funcs: Union[RewardFunc, list[RewardFunc]],
+            step_advantage_coef: float = 0.0,
+            use_step_rewards: bool = False,
             args: Optional[GRPOConfig] = None,
             train_dataset: Optional[Union[Dataset, IterableDataset]] = None,
             eval_dataset: Optional[Union[Dataset, IterableDataset]] = None,
             processing_class: Optional[PreTrainedTokenizerBase] = None,
-            callbacks: Optional[List[TrainerCallback]] = None,
+            callbacks: Optional[list[TrainerCallback]] = None,
             optimizers: tuple[Optional[torch.optim.Optimizer], Optional[torch.optim.lr_scheduler.LambdaLR]] = (None, None),
             peft_config: Optional["PeftConfig"] = None,
             **kwargs,
     ):
-        # Convert single reward functions to lists
-        if callable(step_reward_funcs):
-            step_reward_funcs = [step_reward_funcs]
-        if callable(outcome_reward_funcs):
-            outcome_reward_funcs = [outcome_reward_funcs]
-            
-        # Create combined reward funcs for parent class
-        self.step_reward_funcs = step_reward_funcs
-        self.outcome_reward_funcs = outcome_reward_funcs
-        combined_reward_funcs = step_reward_funcs + outcome_reward_funcs
-        
-        # Set up reward weights
-        self.num_step_funcs = len(step_reward_funcs)
-        self.num_outcome_funcs = len(outcome_reward_funcs)
-        
-        # all ones
-        self.step_reward_weights = torch.ones(self.num_step_funcs)
-        self.outcome_reward_weights = torch.ones(self.num_outcome_funcs)
-        
-        # Step advantage coefficient
-        self.step_advantage_coef = step_advantage_coef
-        
-        # Combined weights for parent class (these won't be used directly in our implementation)
-        #combined_weights = step_reward_weights + outcome_reward_weights
-        
+
         super().__init__(
             model=model,
             env=env,
-            reward_funcs=combined_reward_funcs,
+            reward_funcs=reward_funcs,
             args=args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
@@ -89,146 +61,39 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             peft_config=peft_config,
             **kwargs,
         )
+        
+        self.step_advantage_coef = step_advantage_coef
+        self.use_step_rewards = use_step_rewards
+
+        self.step_reward_funcs = self.reward_funcs[:2]  # First two reward functions
+        self.outcome_reward_funcs = self.reward_funcs[2:]  # Last four reward functions
+        self.num_step_funcs = len(self.step_reward_funcs)
+        self.num_outcome_funcs = len(self.outcome_reward_funcs)
+        self.step_reward_weights = torch.ones(self.num_step_funcs)
+        self.outcome_reward_weights = torch.ones(self.num_outcome_funcs)
+
 
     def _generate_and_score_completions(
          self, inputs: dict[str, Union[torch.Tensor, Any]]   
     ) -> dict[str, Union[torch.Tensor, Any]]:
         device = self.accelerator.device
-        prompts = [x["prompt"] for x in inputs]  # type: ignore 
-        
-        # Generate completions using the environment
-        prompt_ids, prompt_mask = self._prepare_prompt_inputs(inputs)
-        
+        prompts = [x["prompt"] for x in inputs] # type: ignore
+        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs] # type: ignore
+        prompt_inputs = self.processing_class(
+            prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False # type: ignore
+        ) # type: ignore
+        prompt_inputs = Trainer._prepare_inputs(self, prompt_inputs) # type: ignore
+        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
+
+        if self.max_prompt_length is not None:
+            prompt_ids = prompt_ids[:, -self.max_prompt_length :]
+            prompt_mask = prompt_mask[:, -self.max_prompt_length :]
+
         if self.state.global_step != self._last_loaded_step:
             self._move_model_to_vllm()
             self._last_loaded_step = self.state.global_step
 
-        # Generate completions using the environment
-        completion_ids, completion_messages, completion_mask = self._generate_completions(prompts)
-        
-        # Prepare model inputs
-        prompt_completion_ids, attention_mask, logits_to_keep = self._prepare_model_inputs(
-            prompt_ids, prompt_mask, completion_ids, completion_mask
-        )
-        
-        # Compute logps
-        old_per_token_logps, ref_per_token_logps = self._compute_logps(
-            prompt_completion_ids, attention_mask, logits_to_keep
-        )
-        
-        # Special handling for step_advantage_coef=0 case to maintain consistency with GRPO calculation method
-        if self.step_advantage_coef == 0:
-            # Combine step and outcome reward functions
-            combined_reward_funcs = self.outcome_reward_funcs  # When step_advantage_coef=0, only use outcome reward
-            
-            # Calculate all rewards combined
-            rewards_combined = self._calculate_rewards(
-                prompts, completion_messages, combined_reward_funcs, inputs
-            )
-            
-            # Apply weights and sum
-            combined_rewards = (rewards_combined * self.outcome_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
-            
-            # Calculate normalized advantages
-            combined_advantages = self._compute_normalized_advantages(combined_rewards, len(prompts))
-            
-            # Expand advantages to all tokens
-            expanded_advantages = torch.zeros_like(completion_mask, dtype=torch.float32)
-            for i in range(len(prompts)):
-                expanded_advantages[i] = combined_advantages[i].item() * torch.ones_like(completion_mask[i], dtype=torch.float32)
-            
-            # Record log metrics (for consistency, still calculate step_rewards but don't use for training)
-            rewards_step = torch.zeros(len(prompts), len(self.step_reward_funcs), device=device)
-            if len(self.step_reward_funcs) > 0:
-                rewards_step = self._calculate_rewards(
-                    prompts, completion_messages, self.step_reward_funcs, inputs
-                )
-            
-            step_rewards = torch.zeros(len(prompts), device=device)
-            if len(self.step_reward_funcs) > 0:
-                step_rewards = (rewards_step * self.step_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
-            
-            outcome_rewards = combined_rewards
-            
-            # Record logs
-            self._log_metrics(
-                prompts, completion_messages, completion_mask,
-                rewards_step, rewards_combined, step_rewards, outcome_rewards
-            )
-            
-            return {
-                "prompt_ids": prompt_ids,
-                "prompt_mask": prompt_mask,
-                "completion_ids": completion_ids,
-                "completion_mask": completion_mask,
-                "old_per_token_logps": old_per_token_logps,
-                "ref_per_token_logps": ref_per_token_logps,
-                "advantages": expanded_advantages,
-            }
-        
-
-        # Calculate step rewards and outcome rewards separately
-        rewards_step = self._calculate_rewards(
-            prompts, completion_messages, self.step_reward_funcs, inputs
-        )
-        rewards_outcome = self._calculate_rewards(
-            prompts, completion_messages, self.outcome_reward_funcs, inputs
-        )
-        
-        # Apply weights and sum
-        step_rewards = (rewards_step * self.step_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
-        outcome_rewards = (rewards_outcome * self.outcome_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
-        
-        # Compute normalized advantages
-        step_advantages = self._compute_normalized_advantages(step_rewards, len(prompts))
-        outcome_advantages = self._compute_normalized_advantages(outcome_rewards, len(prompts))
-        
-        # Find the positions of <r> tags in each completion
-        result_positions = self._find_result_positions(completion_ids, completion_messages)
-        
-        # Apply the combined advantages based on <r> tag positions
-        # If there's a <r>, tokens before get step+outcome advantage, after get only outcome
-        # If no <r>, all tokens get only outcome advantage
-        combined_advantages = self._combine_advantages(
-            completion_mask, step_advantages, outcome_advantages, result_positions
-        )
-        
-        # Log metrics
-        self._log_metrics(
-            prompts, completion_messages, completion_mask, 
-            rewards_step, rewards_outcome, step_rewards, outcome_rewards
-        )
-        
-        return {
-            "prompt_ids": prompt_ids,
-            "prompt_mask": prompt_mask,
-            "completion_ids": completion_ids,
-            "completion_mask": completion_mask,
-            "old_per_token_logps": old_per_token_logps,
-            "ref_per_token_logps": ref_per_token_logps,
-            "advantages": combined_advantages,
-        }
-    
-    def _prepare_prompt_inputs(self, inputs):
-        """Prepare the prompt inputs for the model."""
-
-        prompts = [x["prompt"] for x in inputs]  # type: ignore
-        prompts_text = [maybe_apply_chat_template(example, self.processing_class)["prompt"] for example in inputs]  # type: ignore
-        prompt_inputs = self.processing_class(
-            prompts_text, return_tensors="pt", padding=True, padding_side="left", add_special_tokens=False
-        )
-        prompt_inputs = Trainer._prepare_inputs(self, prompt_inputs)
-        prompt_ids, prompt_mask = prompt_inputs["input_ids"], prompt_inputs["attention_mask"]
-
-        if self.max_prompt_length is not None:
-            prompt_ids = prompt_ids[:, -self.max_prompt_length:]
-            prompt_mask = prompt_mask[:, -self.max_prompt_length:]
-            
-        return prompt_ids, prompt_mask
-    
-    def _generate_completions(self, prompts):
-        """Generate completions using the environment and broadcast the results."""
-
+        # Gather the original prompts in message dict form, not the text form
         all_prompts = gather_object(prompts)
         if self.accelerator.is_main_process:
             env_result = self.env.generate(
@@ -239,6 +104,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             completion_ids = env_result['ids']
             completion_messages = env_result['messages']
             completion_mask = env_result['mask']
+
         else:
             completion_ids = [None] * len(all_prompts)
             completion_messages = [None] * len(all_prompts)
@@ -256,29 +122,19 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         completion_ids = completion_ids[process_slice]
         completion_messages = completion_messages[process_slice]
         completion_mask = completion_mask[process_slice]
-        
-        # Convert to tensors and pad
-        device = self.accelerator.device
+
+        # Pad + mask after per-sequence EOS tokens
         completion_ids = [torch.tensor(ids, device=device) for ids in completion_ids]
-        completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id)
+        completion_ids = pad(completion_ids, padding_value=self.processing_class.pad_token_id) # type: ignore
 
         completion_mask = [torch.tensor(mask, device=device) for mask in completion_mask]
         completion_mask = pad(completion_mask, padding_value=0)
-        
-        return completion_ids, completion_messages, completion_mask
-    
-    
-    def _prepare_model_inputs(self, prompt_ids, prompt_mask, completion_ids, completion_mask):
-        """Prepare the model inputs for logit computation."""
-        
+
         prompt_completion_ids = torch.cat([prompt_ids, completion_ids], dim=1)
-        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1)
-        logits_to_keep = completion_ids.size(1)
-        return prompt_completion_ids, attention_mask, logits_to_keep
-    
-    def _compute_logps(self, prompt_completion_ids, attention_mask, logits_to_keep):
-        """Compute log probabilities using the model and reference model."""
+        attention_mask = torch.cat([prompt_mask, completion_mask], dim=1) # (B, P+C)
         
+        logits_to_keep = completion_ids.size(1)
+
         with torch.no_grad():
             # When using num_iterations == 1, old_per_token_logps == per_token_logps, so we can skip it's
             # computation here, and use per_token_logps.detach() instead.
@@ -300,9 +156,105 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
                     ref_per_token_logps = self._get_per_token_logps(
                         self.model, prompt_completion_ids, attention_mask, logits_to_keep
                     )
-                    
-        return old_per_token_logps, ref_per_token_logps
-    
+
+        # use message dicts for reward function inputs
+        completions = completion_messages
+        rewards_per_func = torch.zeros(len(prompts), len(self.reward_funcs), device=device)
+        for i, reward_func in enumerate(self.reward_funcs):
+            # Repeat all input columns (but "prompt" and "completion") to match the number of generations
+            keys = [key for key in inputs[0] if key not in ["prompt", "completion"]] # type: ignore
+            reward_kwargs = {key: [example[key] for example in inputs] for key in keys} # type: ignore
+            output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs) # type: ignore
+            rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
+
+        rewards_per_func = gather(rewards_per_func) 
+
+        # Apply weights to each reward function's output and sum 
+        rewards = (rewards_per_func * self.reward_weights.to(device).unsqueeze(0)).sum(dim=1) 
+
+       ###############################################################################################
+        # Calculate step rewards and outcome rewards separately
+        rewards_per_step_func = self._calculate_rewards(
+            prompts, completions, self.step_reward_funcs, inputs
+        )
+        rewards_per_outcome_func = self._calculate_rewards(
+            prompts, completions, self.outcome_reward_funcs, inputs
+        )
+        # Apply weights to each reward function's output and sum
+        step_rewards = (rewards_per_step_func * self.step_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+        outcome_rewards = (rewards_per_outcome_func * self.outcome_reward_weights.to(device).unsqueeze(0)).sum(dim=1)
+
+        if self.step_advantage_coef > 0:       
+            # Compute normalized advantages
+            step_advantages = self._compute_normalized_advantages(step_rewards, len(prompts))
+            outcome_advantages = self._compute_normalized_advantages(outcome_rewards, len(prompts))
+
+            # Find the positions of <r> tags in each completion
+            result_positions = self._find_result_positions(completion_ids, completion_messages)
+
+            # Apply the combined advantages based on <r> tag positions
+            # If there's a <r>, tokens before get step+outcome advantage, after get only outcome
+            # If no <r>, all tokens get only outcome advantage
+            advantages = self._combine_advantages(
+                completion_mask, step_advantages, outcome_advantages, result_positions
+            )
+        else:
+            if self.use_step_rewards:
+                advantages = self._compute_normalized_advantages(rewards, len(prompts))
+            else:
+                advantages = self._compute_normalized_advantages(outcome_rewards, len(prompts))
+        ###############################################################################################
+        
+        # Log the metrics
+        mode = "eval" if self.control.should_evaluate else "train"
+
+        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item() # type: ignore
+        self._metrics[mode]["completion_length"].append(completion_length)
+
+        reward_per_func = rewards_per_func.mean(0) # type: ignore
+        for i, reward_func in enumerate(self.reward_funcs):
+            reward_func_name = reward_func.__name__ # type: ignore
+            self._metrics[mode][f"rewards/{reward_func_name}"].append(reward_per_func[i].item())
+
+        self._metrics[mode]["reward"].append(rewards.mean().item())
+        # self._metrics[mode]["reward_std"].append(std_grouped_rewards.mean().item())
+
+        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
+            prompts_to_log = gather_object(prompts)
+            completions_to_log = gather_object(completions)
+            rewards_to_log = rewards.tolist()
+
+            if self.accelerator.is_main_process:
+                if is_rich_available():
+                    print_prompt_completions_sample(
+                        [str(prompts_to_log[0][-1]["content"])],
+                        [completions_to_log[0]],
+                        [rewards_to_log[0]],
+                        self.state.global_step,
+                    )
+                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None: # type: ignore
+                    import pandas as pd
+
+                    # For logging
+                    table = {
+                        "step": [str(self.state.global_step)] * len(rewards),
+                        "prompt": prompts_to_log,
+                        "completion": completions_to_log,
+                        "reward": rewards.tolist(),
+                    }
+                    df = pd.DataFrame(table)
+                    wandb.log({"completions": wandb.Table(dataframe=df)}) # type: ignore
+
+        return {
+            "prompt_ids": prompt_ids,
+            "prompt_mask": prompt_mask,
+            "completion_ids": completion_ids,
+            "completion_mask": completion_mask,
+            "old_per_token_logps": old_per_token_logps,
+            "ref_per_token_logps": ref_per_token_logps,
+            "advantages": advantages,
+        }
+
     def _calculate_rewards(self, prompts, completions, reward_funcs, inputs):
         """Calculate rewards for a set of reward functions."""
         
@@ -315,21 +267,22 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             reward_kwargs = {key: [example[key] for example in inputs] for key in keys}  # type: ignore
             output_reward_func = reward_func(prompts=prompts, completions=completions, **reward_kwargs)  # type: ignore
             rewards_per_func[:, i] = torch.tensor(output_reward_func, dtype=torch.float32, device=device)
-            
-        from accelerate.utils import gather
+        
         return gather(rewards_per_func)
     
+
     def _compute_normalized_advantages(self, rewards, slice_length=None):
         """Compute normalized advantages from rewards."""
         
         # Compute grouped-wise rewards
-        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
-        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
+        mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1) # type: ignore
 
         # Normalize the rewards to compute the advantages
-        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
+        mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
+        advantages = (rewards - mean_grouped_rewards)
+        
+        std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1) # type: ignore
+        std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0) # type: ignore
 
         # Slice to keep only the local part of the data
         process_slice = slice(
@@ -337,67 +290,6 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
             (self.accelerator.process_index + 1) * slice_length,
         )
         return advantages[process_slice]
-    
-    def _log_metrics(self, prompts, completions, completion_mask, 
-                    rewards_step, rewards_outcome, step_rewards, outcome_rewards):
-        """Log metrics for both step and outcome rewards."""
-        
-        mode = "eval" if self.control.should_evaluate else "train"
-
-        # Log completion length
-        completion_length = self.accelerator.gather_for_metrics(completion_mask.sum(1)).float().mean().item()
-        self._metrics[mode]["completion_length"].append(completion_length)
-
-        # Log individual reward functions
-        for i, reward_func in enumerate(self.step_reward_funcs):
-            reward_func_name = getattr(reward_func, "__name__", f"step_reward_{i}")
-            self._metrics[mode][f"rewards/step/{reward_func_name}"].append(rewards_step.mean(0)[i].item())
-            
-        for i, reward_func in enumerate(self.outcome_reward_funcs):
-            reward_func_name = getattr(reward_func, "__name__", f"outcome_reward_{i}")
-            self._metrics[mode][f"rewards/outcome/{reward_func_name}"].append(rewards_outcome.mean(0)[i].item())
-
-        # Log overall rewards
-        self._metrics[mode]["reward/step"].append(step_rewards.mean().item())
-        self._metrics[mode]["reward/outcome"].append(outcome_rewards.mean().item())
-        
-        # Log combined reward (step + outcome)
-        combined_rewards = step_rewards + outcome_rewards
-        self._metrics[mode]["reward"].append(combined_rewards.mean().item())
-        
-        # Log samples if needed
-        if self.log_completions and self.state.global_step % self.args.logging_steps == 0:
-            self._log_completion_samples(prompts, completions, combined_rewards)
-            
-    def _log_completion_samples(self, prompts, completions, rewards):
-        """Log completion samples to console and wandb if available."""
-
-        prompts_to_log = gather_object(prompts)
-        completions_to_log = gather_object(completions)
-        rewards_to_log = rewards.tolist()  # Convert to Python list here
-
-        if self.accelerator.is_main_process:
-            if len(prompts_to_log) > 0:          
-                if is_rich_available():     
-                    print_prompt_completions_sample(
-                        [str(prompts_to_log[0][-1]["content"])],
-                        [completions_to_log[0]],
-                        [rewards_to_log[0]],
-                        self.state.global_step,
-                    )
-                    
-                if self.args.report_to and "wandb" in self.args.report_to and wandb.run is not None:
-                    import pandas as pd
-                    
-                    # For logging
-                    table = {
-                        "step": [str(self.state.global_step)] * len(rewards),
-                        "prompt": prompts_to_log,
-                        "completion": completions_to_log,
-                        "reward": rewards.tolist(),  # Ensure it's a Python list again
-                    }
-                    df = pd.DataFrame(table)
-                    wandb.log({"completions": wandb.Table(dataframe=df)})
 
     # msgrpo specific
     def _find_result_positions(self, completion_ids, completion_messages):
@@ -484,6 +376,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
                 # No result tag found, use only outcome advantage
                 # Expand scalar to sequence length
                 outcome_advantage_expanded = outcome_advantages[i].item() * torch.ones_like(completion_mask[i], dtype=torch.float32)
+                
                 combined_advantages[i] = outcome_advantage_expanded
                 
         return combined_advantages
@@ -491,7 +384,7 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
     # adopted from GRPOTrainer
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         if return_outputs:
-            raise ValueError("The MSGRPOTrainer does not support returning outputs")
+            raise ValueError("The GRPOTrainer does not support returning outputs")
         # Compute the per-token log probabilities for the model
 
         prompt_ids, prompt_mask = inputs["prompt_ids"], inputs["prompt_mask"]
@@ -516,13 +409,13 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         old_per_token_logps = inputs["old_per_token_logps"] if self.num_iterations > 1 else per_token_logps.detach()
         coef_1 = torch.exp(per_token_logps - old_per_token_logps)
         coef_2 = torch.clamp(coef_1, 1 - self.epsilon, 1 + self.epsilon)
-        
+        ############################################################################################################
         # If the advantages are 1D, we need to unsqueeze it to match the shape of the per-token loss
         if advantages.dim() == 1:
             advantages = advantages.unsqueeze(1)
-        per_token_loss1 = coef_1 * advantages
-        per_token_loss2 = coef_2 * advantages
-
+        ############################################################################################################
+        per_token_loss1 = coef_1 * advantages.unsqueeze(1)
+        per_token_loss2 = coef_2 * advantages.unsqueeze(1)
         per_token_loss = -torch.min(per_token_loss1, per_token_loss2)
         if self.beta != 0.0:
             per_token_loss = per_token_loss + self.beta * per_token_kl
@@ -538,5 +431,4 @@ class MSGRPOEnvTrainer(GRPOEnvTrainer):
         is_clipped = (per_token_loss1 < per_token_loss2).float()
         clip_ratio = (is_clipped * completion_mask).sum() / completion_mask.sum()
         self._metrics[mode]["clip_ratio"].append(self.accelerator.gather_for_metrics(clip_ratio).mean().item())
-        
         return loss

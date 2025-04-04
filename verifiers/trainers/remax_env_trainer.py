@@ -20,6 +20,8 @@ from trl.trainer.utils import pad
 from verifiers.envs.environment import Environment
 from verifiers.utils.logging_utils import print_prompt_completions_sample
 
+from .grpo_env_trainer import GRPOEnvTrainer
+
 if is_peft_available():
     from peft import PeftConfig # type: ignore
 
@@ -29,7 +31,7 @@ if is_wandb_available():
 
 RewardFunc = Union[str, PreTrainedModel, Callable[[list, list], list[float]]]
 
-class ReMaxEnvTrainer(GRPOTrainer):
+class ReMaxEnvTrainer(GRPOEnvTrainer):
     def __init__(
             self,
             model: Union[str, PreTrainedModel],
@@ -44,17 +46,14 @@ class ReMaxEnvTrainer(GRPOTrainer):
             peft_config: Optional["PeftConfig"] = None,
             **kwargs,
     ):
-        if not args.use_vllm: # type: ignore
-            raise ValueError("vLLM must be enabled for ReMaxEnvTrainer")
-        if not (callable(reward_funcs) or (isinstance(reward_funcs, list) and all(callable(f) for f in reward_funcs))): 
-            raise ValueError("reward_funcs must be a function or a list of functions. Use vLLM to host neural reward models.")
-    
+
         # args.num_generations = 1
         args.num_generations = args.num_generations + 1
         # args.num_generations = 2, to meet the requirements of the grpo trainer in line 418-426
         
         super().__init__(
             model=model,
+            env=env,
             reward_funcs=reward_funcs,
             args=args,
             train_dataset=train_dataset,
@@ -65,8 +64,7 @@ class ReMaxEnvTrainer(GRPOTrainer):
             peft_config=peft_config,
             **kwargs,
         )
-        self.env = env
-        
+
         if self.accelerator.is_main_process:
             self.sampling_params.n = 1
             self.greedy_sampling_params = self.sampling_params.clone()
